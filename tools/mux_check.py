@@ -262,6 +262,7 @@ def frozen(v, verbose=True):
 def live(v, verbose=True):
     """a dozen monsters around the player, behaving normally"""
     a = vice.addr
+    v.mem_set(a("debug_no_death"), [1])          # (the crowd touches the player)
     n = a("spawn_ty") - a("spawn_tx")
     tx, ty = a("spawn_tx"), a("spawn_ty")
     tp = v.mem_get(a("spawn_type"), n)

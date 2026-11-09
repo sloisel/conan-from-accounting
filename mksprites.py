@@ -19,6 +19,8 @@ with open('mysprites.txt') as f:
     print('.segment TABLES')
     print('spritecolors:')
     print('.byte '+(','.join(color)))
+    # (the same colours as a list, for tables built at assembly time)
+    print('.var spritecolor_list = List().add('+(','.join(color))+')')
 
     
     

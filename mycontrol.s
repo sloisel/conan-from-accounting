@@ -83,8 +83,11 @@ sword_index: index(sword_list)
 
 // controller numbers: 0 player, 2 sword, 4.. monsters (myenemies.s T_*)
 controllers: .word control_nop, control_sword, control_blob, control_skel, control_ghost, control_cycl, control_jelly, control_wiz, control_prin
+             .word control_heart, control_key, control_key, control_key
 animations: .word player_anim, sword_anim, blob_anim, skel_anim, ghost_anim, cycl_anim, jelly_anim, wiz_anim, prin_anim
+            .word heart_anim, keyr_anim, keyg_anim, keyb_anim
 indices: .word player_index, sword_index, blob_index, skel_index, ghost_index, cycl_index, jelly_index, wiz_index, prin_index
+         .word heart_index, keyr_index, keyg_index, keyb_index
 .segment MAIN
 
 // camera: player shown at (160, 83) of the 304x166 AGSP window
@@ -539,7 +542,7 @@ exec_animations_skip:
 	lda (row_map_ptr),y
 	sta sprite_data_2+sprite_pointer,x
 	tay
-	lda spritecolors-sp0,y
+	lda ptr_colors,y          // (myui.s: monster frames and item pictures)
 	sta sprite_data_2+sprite_color,x
 	lda sprite_data_2+sprite_flash,x   // just hit: blink white
 	beq ea_noflash

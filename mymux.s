@@ -2,8 +2,8 @@
 //
 // Each frame the main loop builds a plan (mux_plan) from the logical sprites
 // that are on screen (y != 0): sorted by y, each gets the hardware sprite
-// that frees up first. The first 8 entries are written by the bottom IRQ
-// before the frame; the others are rewrites during the frame, done by the
+// that frees up first. The first 8 entries are written by the top IRQ
+// (line 37) before the window; the others are rewrites during the frame, done by the
 // IRQ dispatcher (myagsp.s ag_next) at line mx_line. A rewrite can only start
 // once the hardware sprite's previous sprite has finished, must be done before
 // the new sprite starts, and the dispatcher does one at a time and none while
@@ -57,7 +57,6 @@ mx_line_v:  .byte 0
 mx_base:    .byte 0
 mx_outer:   .byte 0
 mx_dropped: .byte 0                    // sprites left out this frame (tests)
-mx_msbmask: .byte 0
 mx_busy:    .byte 0                    // model: dispatcher free from this line
 mx_act:     .byte 0
 mx_mask:    .byte 0
@@ -314,38 +313,32 @@ mx_frame_setup:
     sta mx_i
     rts
 
-// mx_apply_initial: bottom IRQ: hardware sprites for the top of the frame
-mx_apply_initial:
-    lda #0
-    sta mx_msbmask
+// mx_apply_top: top IRQ (line 37, after the status strip): the hardware
+// sprites for the top of the frame. Entry k of the first 8 is on hardware
+// sprite k; unused ones are written too but stay disabled. ~290 cycles.
+mx_apply_top:
     ldx mx_base_f
-    lda mx_init_n
-    beq ma_done
+    .for (var k = 0; k < 8; k++) {
+    lda mx_y+k,x
+    sta $d001+2*k
+    lda mx_xlo+k,x
+    sta $d000+2*k
+    lda mx_ptr+k,x
+    sta AG_SCREEN+$3f8+k
+    lda mx_col+k,x
+    sta $d027+k
+    }
+    ldy mx_init_n
+    lda #0
+    cpy #0
+    beq !+
+    txa                         // $d010 after the first init_n entries
     clc
-    adc mx_base_f
-    sta ma_e                    // (own temp: this runs in the IRQ, while
-ma_loop:                        //  the main loop may be inside mux_plan)
-    ldy mx_reg,x
-    lda mx_y,x
-    sta $d001,y
-    lda mx_xlo,x
-    sta $d000,y
-    ldy mx_slot,x
-    lda mx_ptr,x
-    sta AG_SCREEN+$3f8,y
-    lda mx_col,x
-    sta $d027,y
-    lda mx_msbmask
-    ora mx_msb,x
-    sta mx_msbmask
-    inx
-    cpx ma_e
-    bne ma_loop
-ma_done:
-    lda mx_msbmask
-    sta $d010
-    ldx mx_init_n
-    lda sprite_enable_bits,x
+    adc mx_init_n
+    tax
+    lda mx_d010-1,x
+!:  sta $d010
+    lda sprite_enable_bits,y
     sta $d015
     rts
 
@@ -436,7 +429,7 @@ ms_row:                         // A = badline of the row of offset mx_o, 0: non
     adc #AG_T_LINE
     sec
     sbc c_fine
-    cmp #AG_BOT_LINE+1
+    cmp #AG_BOT_LINE        // (as ag_sw_row: no switch for a row at 246)
     bcs ms_none
     rts
 ms_none:
@@ -446,4 +439,3 @@ ms_none:
 .segment TABLES
 mx_base_f:  .byte 0                    // front buffer's first entry
 mx_init_n:  .byte 0                    // entries written before the frame
-ma_e:       .byte 0

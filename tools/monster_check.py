@@ -21,8 +21,10 @@ import vice
 import game_check as g
 
 BLOB, SKEL, GHOST, CYCL, JELLY, WIZ, PRIN = 4, 6, 8, 10, 12, 14, 16
+HEART, KEYR, KEYG, KEYB = 18, 20, 22, 24
 NAMES = {BLOB: "blob", SKEL: "skeleton", GHOST: "ghost", CYCL: "cyclops",
-         JELLY: "jelly", WIZ: "wizard", PRIN: "princess"}
+         JELLY: "jelly", WIZ: "wizard", PRIN: "princess", HEART: "heart",
+         KEYR: "red key", KEYG: "green key", KEYB: "blue key"}
 HP = {BLOB: 1, SKEL: 2, GHOST: 1, CYCL: 3, JELLY: 2}
 F = {"pointer": 4, "controller": 5, "gxlo": 9, "gxhi": 10, "gylo": 11, "gyhi": 12,
      "state": 21, "timer": 22, "hp": 23, "spawn": 24, "flash": 25, "dir": 26}
@@ -41,6 +43,7 @@ class Game:
         self.ty = v.mem_get(a("spawn_ty"), n)
         self.tp = v.mem_get(a("spawn_type"), n)
         self.map = v.mem_get(a("map"), 4096)
+        v.mem_set(a("debug_no_death"), [1])       # (health: its own check)
         self.tag = v.mem_get(a("tiletag"), 64)
 
     def walkable(self, cx, cy):
@@ -105,14 +108,25 @@ def behaviour(gm):
     # blob: rolls horizontally only, through its rotation frames
     k, s = gm.go_near(BLOB, 1)
     ys, xs, frames = set(), set(), set()
+    track = []
     for _ in range(120):
         gm.frame()
         s = gm.find(k)
         if s:
             ys.add(s["y"]); xs.add(s["x"]); frames.add(s["pointer"] - 128)
-    r = len(ys) == 1 and len(xs) > 20 and frames <= {49, 50, 51, 52} and len(frames) >= 3
-    print(("ok   " if r else "FAIL ") + f"blob rolls sideways only: {len(xs)} x positions, "
-          f"{len(ys)} y, frames {sorted(frames)}")
+            track.append((s["x"], s["pointer"] - 128))
+    # frames 49..52 turn it counter-clockwise: rolling right steps them down
+    good = bad = 0
+    for (x0, f0), (x1, f1), (x2, _) in zip(track, track[1:], track[2:]):
+        if f1 != f0 and x2 != x0:
+            ccw = (f1 - f0) % 4 == 1
+            good += ccw == (x2 < x0)
+            bad += ccw != (x2 < x0)
+    r = len(ys) == 1 and len(xs) > 20 and frames <= {49, 50, 51, 52} and len(frames) >= 3 \
+        and good >= 3 and bad <= 1
+    print(("ok   " if r else "FAIL ") + f"blob rolls sideways only, turning the way it rolls: "
+          f"{len(xs)} x positions, {len(ys)} y, frames {sorted(frames)}, "
+          f"{good} frame steps the right way, {bad} wrong")
     ok &= r
     # ghost: closes in on the player, eyes in 4 frames 79..82
     k, s = gm.go_near(GHOST, 0, dx=16)
@@ -315,6 +329,115 @@ def contact(gm):
     return r
 
 
+def health(gm):
+    """three hearts: a touch costs one (and the strip shows it); the last one
+    sends the player back to the start with full hearts"""
+    v, a = gm.v, vice.addr
+    v.mem_set(a("debug_no_death"), [0])
+    v.mem_set(a("player_hp"), [3]); v.mem_set(a("player_hurt"), [0])
+    v.mem_set(a("ui_col"), [0] * 6)                 # (ui_update must rewrite it)
+
+    def touch():
+        """walk into a skeleton until a heart is lost (or the player is sent
+        back to the start, which also clears the hurt timer)"""
+        k, s = gm.go_near(SKEL, 2, dx=6)
+        v.mem_set(a("player_hurt"), [0])
+        hp0 = v.mem_get(a("player_hp"), 1)[0]
+        for _ in range(80):
+            s = gm.find(k)
+            if v.mem_get(a("player_hp"), 1)[0] != hp0 or v.mem_get(a("player_hurt"), 1)[0]:
+                return True
+            if s:
+                gm.put(0, s["x"] + 4 * 32, s["y"])
+            gm.frame()
+        return False
+    t = touch()
+    gm.frame(2)
+    hp = v.mem_get(a("player_hp"), 1)[0]
+    col = list(v.mem_get(a("ui_col"), 3))
+    r1 = t and hp == 2 and col == [2, 2, 11]
+    v.mem_set(a("player_hp"), [1])
+    t2 = touch()
+    gm.frame(3)
+    hp2 = v.mem_get(a("player_hp"), 1)[0]
+    p = gm.sprites()[0]
+    at_start = abs(p["x"] - 10 * 256) < 4 * 256 and abs(p["y"] - 245 * 256) < 4 * 256
+    v.mem_set(a("debug_no_death"), [1])
+    r = r1 and t2 and hp2 == 3 and at_start
+    print(("ok   " if r else "FAIL ") + f"health: a touch costs a heart ({hp} left, strip {col}); "
+          f"the last one: back at the start ({at_start}) with {hp2} hearts")
+    return r
+
+
+def items(gm):
+    """a dying monster may leave a heart (forced here through the random
+    sequence); touching it gives a heart back. Touching a key collects it
+    for good and lights it up in the strip."""
+    v, a = gm.v, vice.addr
+    ok = True
+    heart = None
+    for which in range(4):
+        k, s = gm.go_near(SKEL, which, dx=14)
+        v.mem_set(gm.base + 32 * F["state"] + s["i"], [0xC0])     # dying, harmless
+        v.mem_set(gm.base + 32 * F["timer"] + s["i"], [2])
+        v.mem_set(a("rand_index"), [224])                          # 4 low values
+        for _ in range(4):
+            gm.frame()
+            hs = [h for h in gm.sprites() if h["controller"] == HEART]
+            if hs:
+                heart = hs[0]
+                break
+        if heart:
+            break
+    v.mem_set(a("player_hp"), [2])
+    taken = False
+    if heart:
+        for _ in range(10):
+            gm.put(0, heart["x"], heart["y"])
+            gm.frame()
+            if not any(h["controller"] == HEART for h in gm.sprites()):
+                taken = True
+                break
+    hp = v.mem_get(a("player_hp"), 1)[0]
+    r = heart is not None and taken and hp == 3
+    print(("ok   " if r else "FAIL ") + f"a monster leaves a heart ({heart is not None}); "
+          f"taking it: gone {taken}, hearts 2 -> {hp}")
+    ok &= r
+    for c, typ in enumerate((KEYR, KEYG, KEYB)):
+        k, s = gm.go_near(typ, 0, dx=4)
+        for _ in range(10):
+            s = gm.find(k)
+            if s is None:
+                break
+            gm.put(0, s["x"], s["y"])
+            gm.frame()
+        got = v.mem_get(a("has_key") + c, 1)[0]
+        col = v.mem_get(a("ui_col") + 3 + c, 1)[0]
+        r = s is None and got == 1 and gm.spawn_state(k) == 2 and col == (2, 5, 14)[c]
+        print(("ok   " if r else "FAIL ") + f"{NAMES[typ]}: collected {got == 1}, gone for good "
+              f"{gm.spawn_state(k) == 2}, strip colour {col}")
+        ok &= r
+    return ok
+
+
+def strip(gm):
+    """the status strip on screen: each picture in its colour, above line 37"""
+    v, a = gm.v, vice.addr
+    g.bottom_irq(gm.v)
+    px = g.frame(v)
+    cols = list(v.mem_get(a("ui_col"), 6))
+    xs = (32, 48, 64, 284, 298, 312)
+    found = []
+    for k in range(6):
+        seen = {px(line, x) for line in range(16, 37) for x in range(xs[k], xs[k] + 16)}
+        found.append(cols[k] in seen)
+    below = {px(line, x) for line in range(37, 81) for x in range(31, 334)}
+    r = all(found) and below == {0}
+    print(("ok   " if r else "FAIL ") + f"status strip drawn: {found}, black between it and "
+          f"the window: {below == {0}}")
+    return r
+
+
 def victory(gm):
     kp, p = gm.go_near(PRIN, 0, dx=6)
     gm.put(0, p["x"], p["y"])
@@ -337,7 +460,8 @@ def main(argv):
         gm = Game(v)
         ok = True
         for name, fn in (("wizard", wizard), ("behaviour", behaviour), ("sword", sword),
-                         ("hitbox", hitbox), ("contact", contact), ("victory", victory)):
+                         ("hitbox", hitbox), ("contact", contact), ("health", health),
+                         ("items", items), ("strip", strip), ("victory", victory)):
             if what in (name, "all"):
                 ok &= fn(gm)
     finally:

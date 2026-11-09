@@ -42,11 +42,17 @@ sprites_end:
 .assert "AGSP pointer-slot blocks are free", sprites_end <= AG_PTRCODE * 64, true
 
 .segment TABLES
-.var clipList = List().add($dd, $de, $df, $f7, $f8, $f9, $fc, $fd, $fe, $ff)
+// ($ff is not used: its last 8 bytes are glyph $ff, shown blank in the
+// open border below the window -- myui.s; UI_BLK + 5 is spare AG_ALT space)
+.var clipList = List().add($dd, $de, $df, $f7, $f8, $f9, $fc, $fd, $fe, UI_BLK + 5)
 clip_blocks: .fill clipList.size(), clipList.get(i)
 .for (var i = 0; i < clipList.size(); i++) {
     .var a0 = clipList.get(i) * 64
     .assert "clip block above the map's glyphs", a0 < charsetaddr || a0 >= charsetaddr + $aa * 8, true
+    .assert "clip block clear of block $ff (blank sprite block, glyph $ff)", a0 + 64 <= UI_BLANK_BLK * 64, true
+    .assert "clip block clear of the status strip's pictures and AG_ALT's mirror",
+            a0 >= (UI_BLK + 5) * 64 || a0 + 64 <= UI_BLK * 64, true
+    .assert "clip block clear of AG_ALT's mirrored slots", a0 >= AG_ALT + 977 || a0 + 64 <= AG_ALT + 977 || a0 >= $1000, true
     .assert "clip block clear of pointer-slot glyphs", a0 + 64 <= AG_PTRGLYPH || a0 >= AG_PTRGLYPH + 64, true
     .assert "clip block clear of pointer-slot blocks", a0 >= (AG_PTRCODE + 8) * 64 || a0 + 64 <= AG_PTRCODE * 64, true
 }
@@ -54,8 +60,6 @@ clip_base:   .byte 0, CLIP_SET
 clip_parity: .byte 0
 clip_next:   .byte 0
 clip_limit:  .byte 0
-clip_block:  .byte 0
-clip_n:      .byte 0
 
 .segment MAIN
 // clip_sprites: run after exec_animations (needs this frame's pointers)
@@ -82,70 +86,117 @@ cs_loop:
     sta sprite_data_2+sprite_y,x
     jmp cs_next
 !:  inc clip_next
-    lda clip_blocks,y
-    sta clip_block
     jsr clip_one
+    ldx cl_x
 cs_next:
     inx
     jmp cs_loop
 cs_done:
     rts
 
-// clip_one: X = sprite, clip_block = destination block
+// clip_one: X = sprite, Y = index of its spare block in clip_blocks. The
+// block gets the sprite frame's visible rows (from row `clip` on) followed by
+// empty rows, and becomes the sprite's pointer. A block keeps what it holds:
+// if that is already this frame with this clip (a sprite resting at the
+// edge), nothing is copied; otherwise an unrolled copy is entered at the
+// right point (13 cycles per byte), and only the bytes it held beyond the
+// new visible part are cleared (usually a row or two as a sprite slides).
 clip_one:
-    lda clip_block          // destination = block * 64
-    lsr
-    lsr
-    sta temp4+1
-    lda clip_block
-    asl
-    asl
-    asl
-    asl
-    asl
-    asl
-    sta temp4
+    stx cl_x
+    sty cl_slot
+    lda sprite_data_2+sprite_clip,x
+    sta cl_c
     lda sprite_data_2+sprite_pointer,x
     sta sprite_data_2+sprite_srcptr,x
-    lsr                     // source = frame * 64 + 3 * clip
-    lsr
-    sta temp3+1
+    cmp clip_blk_src,y
+    bne cl_fill
+    lda cl_c
+    cmp clip_blk_clip,y
+    beq cl_set              // already there
     lda sprite_data_2+sprite_pointer,x
-    asl
-    asl
-    asl
-    asl
-    asl
-    asl
+cl_fill:                    // A = source frame
+    sta clip_blk_src,y
+    tax
+    lda cl_c
+    sta clip_blk_clip,y
+    lda clip_blocks,y
+    tay
+    lda cl_blk_lo,y         // destination: block * 64
+    sta temp4
+    lda cl_blk_hi,y
+    sta temp4+1
+    ldy cl_c
+    lda cl_blk_lo,x         // source: frame * 64 + 3 * clip (low 6 bits free)
+    ora cl_mul3,y
     sta temp3
-    lda sprite_data_2+sprite_clip,x
-    sta clip_n
-    asl
-    adc clip_n              // 3 * clip (clip < 21: no carry)
-    sta clip_n
-    clc
-    adc temp3
-    sta temp3
-    bcc !+
-    inc temp3+1
-!:  lda #63
-    sec
-    sbc clip_n
-    sta clip_n              // visible bytes
+    lda cl_blk_hi,x
+    sta temp3+1
+    lda cl_copy_lo,y        // copy 63 - 3 * clip bytes
+    sta cl_vec
+    lda cl_copy_hi,y
+    sta cl_vec+1
     ldy #0
-!:  lda (temp3),y
-    sta (temp4),y
-    iny
-    cpy clip_n
-    bne !-
+    jsr cl_go               // Y = bytes copied
+    sty cl_n
+    ldx cl_slot
+    lda clip_blk_end,x      // what it held may go further: clear the rest
+    pha
+    tya
+    sta clip_blk_end,x
+    pla
+    sec
+    sbc cl_n                // count
+    beq cl_set
+    bcc cl_set
+    eor #$ff
+    sec
+    adc #63                 // enter at 63 - count
+    tax
+    lda cl_zero_lo,x
+    sta cl_vec
+    lda cl_zero_hi,x
+    sta cl_vec+1
     lda #0
-!:  sta (temp4),y           // rows below the visible part: empty
-    iny
-    cpy #63
-    bne !-
-    lda clip_block
+    jsr cl_go
+cl_set:
+    ldy cl_slot
+    lda clip_blocks,y
+    ldx cl_x
     sta sprite_data_2+sprite_pointer,x
     rts
+cl_go:
+    jmp (cl_vec)
+cl_copy:
+    .for (var i = 0; i < 63; i++) {
+    lda (temp3),y
+    sta (temp4),y
+    iny
+    }
+    rts
+cl_zero:
+    .for (var i = 0; i < 63; i++) {
+    sta (temp4),y
+    iny
+    }
+    rts
+cl_copy_lo: .fill 21, <(cl_copy + 15 * i)       // skip 3 * clip copies
+cl_copy_hi: .fill 21, >(cl_copy + 15 * i)
+cl_zero_lo: .fill 64, <(cl_zero + 3 * i)
+cl_zero_hi: .fill 64, >(cl_zero + 3 * i)
+cl_mul3:    .fill 21, 3 * i
+cl_blk_lo:  .fill 256, (i << 6) & 255
+cl_blk_hi:  .fill 256, i >> 2
+
+.segment TABLES
+cl_vec:        .word 0
+.assert "cl_vec not on a page end (jmp indirect)", (cl_vec & $ff) != $ff, true
+cl_x:          .byte 0
+cl_slot:       .byte 0
+cl_c:          .byte 0
+cl_n:          .byte 0
+clip_blk_src:  .fill clipList.size(), 0       // what each spare block holds
+clip_blk_clip: .fill clipList.size(), 0
+clip_blk_end:  .fill clipList.size(), 63      // bytes up to which it may be non-empty
 
 .segment MAIN
 // The raster interrupts live in myagsp.s; the multiplexer (mymux.s) writes

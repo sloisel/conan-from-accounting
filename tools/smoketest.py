@@ -11,6 +11,7 @@ import game_check
 import monster_check
 import irq_audit
 import mux_check
+import border_check
 
 ROOT = vice.ROOT
 TOOL = os.path.join(ROOT, "tools", "vice.py")
@@ -99,6 +100,16 @@ def main():
         check(bad == 0 and not irq and lo >= 10,
               f"multiplexer, live crowd: {lo}..{hi} sprites, {bad} bad frames, "
               f"IRQ chain {'intact' if not irq else irq[:2]} ({upd:.2f} updates/frame)")
+        vice.set_keys(v, ["W", "A"])                    # the crowd, scrolling
+        bad, lines, missing = border_check.check(v, 150, verbose=False)
+        vice.set_keys(v, ["S", "D"])
+        bad2, lines2, missing2 = border_check.check(v, 150, verbose=False)
+        vice.set_keys(v, [])
+        bad3 = border_check.sweep(v, 120, verbose=False)
+        check(bad3 == 0, f"open border clean at 120 camera positions all over the map: {bad3} bad")
+        check(bad + bad2 == 0, f"open border (status strip) clean while scrolling past a crowd: "
+                               f"{bad + bad2} of 300 frames with stray pixels or a missing picture "
+                               f"(lines {sorted(set(lines) | set(lines2))[:8]})")
         v.close()
 
         # gameplay, in a fresh game (the checks above froze the monsters)
@@ -114,6 +125,8 @@ def main():
         for name, fn in (("wizard", monster_check.wizard), ("behaviour", monster_check.behaviour),
                          ("sword", monster_check.sword), ("hitbox", monster_check.hitbox),
                          ("contact", monster_check.contact),
+                         ("health", monster_check.health), ("items", monster_check.items),
+                         ("strip", monster_check.strip),
                          ("victory", monster_check.victory)):
             check(fn(gm), f"monsters: {name} checks")
         v.close()

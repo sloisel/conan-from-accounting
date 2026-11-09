@@ -25,14 +25,17 @@
 .const T_JELLY = 12
 .const T_WIZ = 14
 .const T_PRIN = 16
+.const T_HEART = 18                    // a heart dropped by a monster (myui.s)
+.const T_KEY = 20                      // keys: 20 red, 22 green, 24 blue
 .const MAX_SPRITES = 16                // player, sword and up to 14 monsters alive
 .const INTANGIBLE = $80                // sprite_state bit: no hits, no contact
 .const DYING = $40                     // sprite_state bit: playing its death
+.const KNOCK_END = 8                   // hit flash counts down from 16: pushed above this
 .const DEATH_FRAMES = 28
 
 .segment TABLES
 // per type (index = type / 2)
-en_hp_tab:     .byte 0, 0, 1, 2, 1, 3, 2, 255, 255
+en_hp_tab:     .byte 0, 0, 1, 2, 1, 3, 2, 255, 255, 255, 255, 255, 255
 debug_freeze_enemies: .byte 0          // tests: monsters keep still, no (de)spawning
 has_sword:     .byte 0                 // given by the wizard
 player_hurt:   .byte 0                 // frames of knockback/invulnerability left
@@ -70,9 +73,12 @@ dir4_dx_chg:   .word 0, chargev, 0, -chargev
 dir4_dy_chg:   .word chargev, 0, -chargev, 0
 
 // animations (delay, frame; 0 ends a sequence) and their start indices
+// blob: frames 49..52 turn its three lobes 30 degrees counter-clockwise each
+// (one 120-degree period); rolling without skating at 0.75 px/frame on a
+// ~10.5 px radius: 30 degrees = 5.5 px = 7 frames per drawing
 .var blob_list = List().add(
-    8,sp0+49, 8,sp0+50, 8,sp0+51, 8,sp0+52, 0,      // 0: rolling right
-    8,sp0+52, 8,sp0+51, 8,sp0+50, 8,sp0+49, 0)      // 1: rolling left
+    7,sp0+52, 7,sp0+51, 7,sp0+50, 7,sp0+49, 0,      // 0: rolling right (clockwise)
+    7,sp0+49, 7,sp0+50, 7,sp0+51, 7,sp0+52, 0)      // 1: rolling left
 .var skel_list = List().add(
     10,sp0+53, 10,sp0+54, 10,sp0+53, 10,sp0+55, 0,  // 0: down
     10,sp0+56, 10,sp0+57, 10,sp0+56, 10,sp0+58, 0,  // 1: right
@@ -400,7 +406,11 @@ en_common:
     lda sprite_data_2+sprite_controller,x
     cmp #T_WIZ
     bcs en_pd                   // wizard and princess are friendly
-    lda sprite_data_2+1+sprite_anim     // sword out?
+    lda sprite_data_2+sprite_flash,x
+    cmp #KNOCK_END+1
+    bcc !+
+    jmp en_knock                // just hit: pushed away
+!:  lda sprite_data_2+1+sprite_anim     // sword out?
     beq en_touch
     lda sprite_data_2+sprite_flash,x
     bne en_touch                // just hit: invulnerable for a moment
@@ -410,8 +420,17 @@ en_common:
     bcc en_touch
     lda #16                     // hit!
     sta sprite_data_2+sprite_flash,x
+    lda player_dir_nz           // pushed the way the sword swings
+    sec
+    sbc #1
+    asl
+    asl
+    asl
+    sta sprite_data_2+sprite_knock,x
     dec sprite_data_2+sprite_hp,x
-    bne en_touch
+    beq !+
+    jmp en_touch
+!:
     ldy sprite_data_2+sprite_spawn,x        // killed: it stays dead, and
     lda #2                                  // plays its death first
     sta spawn_state,y
@@ -433,6 +452,7 @@ en_touch:
     bcs en_ok
     lda #40                     // knock the player away from the monster
     sta player_hurt
+    jsr player_damage           // one heart less (myui.s)
     lda #<48
     ldy #>48
     ldx en_sx                   // monster left of the player: push right
@@ -454,13 +474,44 @@ en_ok:
     clc
     rts
 
+// en_knock: A = flash (16..KNOCK_END+1): the monster flies back the way the
+// sword swung, fast at first, slowing down (15 px in all), walls
+// permitting; it does nothing else meanwhile (no contact). Returns C = 1.
+en_knock:
+    sec
+    sbc #KNOCK_END+1            // 0..7: speed step
+    ora sprite_data_2+sprite_knock,x
+    tay
+    lda kn_vx_lo,y
+    sta sprite_data_2+sprite_dxlo,x
+    lda kn_vx_hi,y
+    sta sprite_data_2+sprite_dxhi,x
+    lda kn_vy_lo,y
+    sta sprite_data_2+sprite_dylo,x
+    lda kn_vy_hi,y
+    sta sprite_data_2+sprite_dyhi,x
+    jsr control_move
+    jsr en_finish
+    sec
+    rts
+// knockback velocity per think: index = direction * 8 + speed step, for the
+// sword's directions S, SE, E, NE, N, NW, W, SW; step s: (s+1) * 20/32 px per frame
+// (thinks see flash 14, 12, 10: 3.75, 2.5, 1.25 px per frame, 15 px in all)
+.var kn_dx = List().add(0, 0.707, 1, 0.707, 0, -0.707, -1, -0.707)
+.var kn_dy = List().add(1, 0.707, 0, -0.707, -1, -0.707, 0, 0.707)
+.function kn_v(d, i) { .return round(d.get(i >> 3) * ((i & 7) + 1) * 20 * EN_THINK) & $ffff }
+kn_vx_lo: .fill 64, <kn_v(kn_dx, i)
+kn_vx_hi: .fill 64, >kn_v(kn_dx, i)
+kn_vy_lo: .fill 64, <kn_v(kn_dy, i)
+kn_vy_hi: .fill 64, >kn_v(kn_dy, i)
+
 // en_dying: X = monster playing its death. Blinks white and in and out;
 // blob spins fast, skeleton and cyclops shake apart, ghost floats up,
 // jelly sinks. Returns C = 1 (the behaviour must not run).
 en_dying:
     dec sprite_data_2+sprite_timer,x
     bne !+
-    jsr sprite_free             // done
+    jsr en_drop                 // done: gone, or a heart (myui.s)
     sec
     rts
 !:  lda sprite_data_2+sprite_timer,x
@@ -1134,9 +1185,13 @@ msg_key:
 !:  lda #1
     rts
 
-// player_effects: border flash while hurt (main loop, once per frame)
+// player_effects: border flash while hurt; out of hearts: start again
+// (main loop, once per frame)
 player_effects:
-    lda player_hurt
+    lda player_dead
+    beq !+
+    jsr player_respawn          // (myui.s)
+!:  lda player_hurt
     beq !+
     dec player_hurt
     cmp #30

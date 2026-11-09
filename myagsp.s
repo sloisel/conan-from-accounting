@@ -42,7 +42,24 @@
 .const AG_D018_MAIN = ((AG_SCREEN >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
 .const AG_D018_SAFE = ((AG_SAFE >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
 .const AG_D018_ALT  = ((AG_ALT >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
-.const AG_LINE_PRE  = 40
+.const AG_LINE_PRE  = 37             // after the status strip's sprites (myui.s)
+// status strip (myui.s)
+.const UI_SCREEN    = $0000
+.const AG_D018_UI   = ((UI_SCREEN >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
+.const UI_IRQ_LINE  = 2
+.const UI_Y         = 15                // sprite y: lines 16..36
+.const UI_BLK       = $34               // blocks: heart, key x3
+.const UI_HEART_BLK = UI_BLK
+.const UI_KEY_BLK   = UI_BLK + 1        // + key 0..2 (same picture, own colour)
+// the blank sprite block is $ff ($3fc0-$3fff, cleared at ag_init): as a
+// character code it is blank too, which matters because the hidden badline
+// at 247 may fetch AG_SAFE's sprite pointer bytes as characters (its row can
+// wrap into offsets 1016..1023), shown in the open border
+.const UI_BLANK_BLK = $ff
+.const UI_DIM       = 11                // dark grey: empty heart, missing key
+.const PLAYER_HP    = 3
+.const HEART_LIFE   = 200               // thinks (8 s) before a dropped heart goes
+
 .const AG_FIRST_LINE = 47
 .const AG_T_LINE    = 81              // first visible line
 .const AG_BOT_LINE  = 246
@@ -142,6 +159,7 @@ ag_init:
     sta AG_ALT+$3f8,x
     dex
     bpl !-
+    jsr ui_init             // status strip pictures and pointers
     lda smooth_x+1
     sta ag_cx
     lda smooth_y+1
@@ -236,14 +254,14 @@ pr_ydone:
     clc
     adc #1
     and #7
-    ora #$10
-    sta n_norm
-    ldx #$17
+    ora #$18                // RSEL=1 in the window: no border check at line
+    sta n_norm              // 247 (open border, status strip), even when a
+    ldx #$1f                // badline at 246 delays the bottom IRQ into 247
     stx n_botd011
     ldx ag_blank
     stx n_blank
     beq !+
-    ldx #$77
+    ldx #$7f
     stx n_botd011
     ora #$60                // blank frame: stay in the invalid (black) mode
     sta n_norm
@@ -485,8 +503,8 @@ sw_later:
     adc #AG_T_LINE
     sec
     sbc p_fine              // its badline B = 81 - fine + 8*row
-    cmp #AG_BOT_LINE+1
-    bcs sw_none             // starts below the window
+    cmp #AG_BOT_LINE
+    bcs sw_none             // starts at 246 (cancelled: ag_bot_switch) or below
     cmp n_swB1
     beq sw_none             // same row as the first slot
     ldx n_swB1
@@ -591,8 +609,13 @@ an_irq:                     // A = line of the next event
     clc
     rts
 an_bot:
+    lda $d012               // too close to line 245 for its IRQ: the caller
+    cmp #AG_BOT_LINE-2      // does the bottom work right away (sw_chain)
+    bcs !+
     jsr ag_set_bottom
     clc
+    rts
+!:  sec
     rts
 
 // an_setsl: an_sl = line of the next pointer-row switch event (255: none)
@@ -624,7 +647,7 @@ ag_set_bottom:
     sta $fffe
     lda #>ag_irq_bot
     sta $ffff
-    lda #AG_BOT_LINE
+    lda #AG_BOT_LINE-1      // a line early: ag_bot_switch times its writes
     sta $d012
     rts
 
@@ -663,26 +686,64 @@ ae_swap:                    // a pointer-row switch
     bcc ae_next
     asl $d019
 sw_chain:                   // do the bottom IRQ's work from here
+    jsr ag_bot_switch
+    jmp ag_bot_open
+
+// ag_bot_switch: the end of the window (A only):
+//  - $d018 = AG_SAFE: line 247 is a hidden badline fetching its $ff codes, and
+//    the sprites still going on below the window read its sprite pointers
+//    (a blank block);
+//  - $d011: YSCROLL=7 (line 247 a badline) and RSEL=1 (myui.s, open border).
+// Both must land after the last window line's sprite pointer fetches (sprites
+// 3-7: cycles 1..10) and, on a badline, after its character fetches (15..54),
+// but before the next line's fetches (from 58). If line 246 is a badline
+// (fine 3) and sprites cross the bottom edge, their DMA and the badline leave
+// the CPU no cycle at all from 246:12 to 247:10: then the switch is done on
+// line 245 instead, cancelling the badline at 246, which stays black (the
+// window is a line shorter at that one scroll position).
+ag_bot_switch:
+    lda p_fine
+    cmp #(81 - AG_BOT_LINE) & 7     // = 3: line 246 would be a badline
+    bne bs_246
 !:  lda $d012
-    cmp #AG_BOT_LINE
+    cmp #AG_BOT_LINE-1
     bcc !-
-    lda n_botd011
+    lda n_botd011           // (line 245, cycles 11..54: called from its IRQ)
     sta $d011
     lda #AG_D018_SAFE
     sta $d018
-    jmp ag_bot_body
-
-// ---- bottom IRQ: hidden safe badline, commit, sprites, music ------------
-ag_irq_bot:
-    pha
-    lda n_botd011           // YSCROLL=7: line 247 is a badline (hidden);
-    sta $d011               // must land before 247:12 even if 246 is a badline
+    rts
+bs_246:
+!:  lda $d012
+    cmp #AG_BOT_LINE
+    bcc !-
+    nop                     // exit at 246:0..8 (or 11 after sprite DMA):
+    nop                     // the writes at 246:22..30 (not a badline here)
+    nop
+    nop
+    nop
+    nop
     lda #AG_D018_SAFE
     sta $d018
+    lda n_botd011
+    sta $d011
+    rts
+
+// ---- bottom IRQ (line 245): hidden safe badline, commit, sprites, music --
+ag_irq_bot:
+    pha
+    jsr ag_bot_switch
     txa
     pha
     tya
     pha
+ag_bot_open:
+    lda $d012               // keep the border open: RSEL=0 again after line
+    cmp #248                // 247's border check and before line 251's, so
+    bcc ag_bot_open         // neither closes it (the status strip is in it)
+    lda n_botd011
+    and #$f7
+    sta $d011
 ag_bot_body:
     lda ag_commit
     beq !+
@@ -710,15 +771,14 @@ ag_bot_body:
     // The next frame's top IRQ is scheduled now and interrupts may nest from
     // here on: the rest (sprites, pointer rows, music) can never make the top
     // IRQ late, even in an unusually heavy frame.
-    lda #<ag_irq_pre
+    lda #<ag_irq_ui         // (the status strip's IRQ, then the top IRQ)
     sta $fffe
-    lda #>ag_irq_pre
+    lda #>ag_irq_ui
     sta $ffff
-    lda #AG_LINE_PRE
+    lda #UI_IRQ_LINE
     sta $d012
     asl $d019               // ack our own raster flag before cli
     cli
-    jsr mx_apply_initial    // hardware sprites for the top of the frame
 ab_done:
     jsr ag_fix_rows
     jsr sidplay
@@ -730,23 +790,24 @@ ab_end:                     // (tools/irq_audit.py: bottom work done)
     pla
     rti
 
-// ---- top IRQ (line 40): set up a stable raster at line 45 -------------
+// ---- top IRQ (line 37): game sprites, then a stable raster at line 45 --
 ag_irq_pre:
     pha
     txa
     pha
     tya
     pha
-    lda #<ag_irq_top2
+    jsr mx_apply_top        // the status strip is done: the frame's first
+    lda #<ag_irq_top2       // 8 game sprites (in what was idle waiting)
     sta $fffe
     lda #>ag_irq_top2
     sta $ffff
     lda #45
     sta $d012
     asl $d019
-    lda #44
-!:  cmp $d012
-    bne !-
+!:  lda $d012
+    cmp #44
+    bcc !-
     tsx
     cli
     jmp ag_sled

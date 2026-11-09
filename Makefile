@@ -14,6 +14,9 @@ spawns.s: ultimate.s tools/gen_spawns.py
 hitbox.s: mysprites.txt tools/gen_hitbox.py
 	python3 tools/gen_hitbox.py > hitbox.s
 
+uigfx.s: tools/gen_ui.py
+	python3 tools/gen_ui.py > uigfx.s
+
 mygame.d64: Makefile KickAss.cfg $(asm)
 	java -jar KickAss.jar mygame.s
 

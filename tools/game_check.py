@@ -135,7 +135,14 @@ def check_frame(v, ref, state, glitches=None):
                if px(line, x) and not spr.covers(line, x)]
         return (cx, cy, fine, xs), bad, []
     allow = glitch_lines(state)
-    for line in range(T_LINE, BOTTOM + 1):
+    # at fine 3, line 246 would be a badline: the window ends at 245 and 246 is
+    # black (myagsp.s ag_bot_switch)
+    last = BOTTOM - 1 if fine == (T_LINE - BOTTOM) % 8 else BOTTOM
+    for x in range(X_MIN, X_MAX + 1):
+        for line in range(last + 1, BOTTOM + 1):
+            if px(line, x):
+                bad.append((line, x, px(line, x), 0))
+    for line in range(T_LINE, last + 1):
         wy = cy * 8 + fine + line - T_LINE
         ok_spr = allow.get(line, ())
         for x in range(X_MIN, X_MAX + 1):
@@ -330,7 +337,7 @@ def check_top_clip(v, verbose=True):
     frames = [v.mem_get((sp0 + f) * 64, 63) for f in range(49, 85)]   # any monster frame
     ref = Ref(v)
     fails = 0
-    for k in list(range(1, 21)) + [0, 21, 25]:
+    for k in list(range(1, 21)) + list(range(19, 0, -1)) + [0, 21, 25]:   # (in and out)
         px, py = ex, ey + (70 + k) * 32                # enemy y reg = 81 - k
         for off, val in ((32 * 9, px & 255), (32 * 10, px >> 8),
                          (32 * 11, py & 255), (32 * 12, py >> 8)):
@@ -414,7 +421,7 @@ def main(argv):
         print(f"window-edge pointer switching: {ec} frames with a sprite there, {eb} bad")
         failures += eb
         clip_fails = check_top_clip(v)
-        print(f"top-edge clipping: {23 - clip_fails}/23 positions OK")
+        print(f"top-edge clipping: {42 - clip_fails}/42 positions OK")
         failures += clip_fails
     finally:
         v.close()
