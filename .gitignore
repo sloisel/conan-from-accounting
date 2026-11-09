@@ -1,0 +1,16 @@
+# editor backups
+*~
+\#*\#
+.#*
+*.bak
+.DS_Store
+
+# build products (regenerate with `make`)
+mygame.d64
+mygame.sym
+*.vs
+build/
+
+# emulator / debug scratch
+*.vsf
+screenshots/
