@@ -142,7 +142,7 @@ def check_frame(v, ref, state, glitches=None):
         for line in range(last + 1, BOTTOM + 1):
             if px(line, x):
                 bad.append((line, x, px(line, x), 0))
-    for line in range(T_LINE, last + 1):
+    for line in range(T_LINE + 1, last + 1):      # (line 81 black: window from 82)
         wy = cy * 8 + fine + line - T_LINE
         ok_spr = allow.get(line, ())
         for x in range(X_MIN, X_MAX + 1):
@@ -156,7 +156,7 @@ def check_frame(v, ref, state, glitches=None):
                         glitches[line] = glitches.get(line, 0) + 1
                     continue
                 bad.append((line, x, got, want))
-    band = [(line, x) for line in range(56, T_LINE) for x in range(X_MIN, X_MAX + 1, 2)
+    band = [(line, x) for line in range(56, T_LINE + 1) for x in range(X_MIN, X_MAX + 1, 2)
             if px(line, x)]
     return (cx, cy, fine, xs), bad, band
 

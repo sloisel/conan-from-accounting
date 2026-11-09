@@ -6,12 +6,12 @@
   contact:   touching a monster knocks the player back (hurt timer, border)
   wizard:    no sword at first; touching the old wizard shows his message,
              J continues, the player has the sword and the wizard is gone
-  victory:   touching the princess shows the title picture again
-             (VIC bank 2, bitmap mode)
+  gates:     the locked gates open with their keys; the prison's starts
+             the rescue, which ends on the title picture
 
   hitbox:    the sword hits exactly where the blade's pixels overlap a monster
 
-Usage: tools/monster_check.py [wizard|behaviour|sword|hitbox|contact|victory|all]
+Usage: tools/monster_check.py [wizard|behaviour|sword|hitbox|contact|health|items|strip|gates|all]
 """
 import os
 import sys
@@ -138,15 +138,19 @@ def behaviour(gm):
     r = s is not None and d1 < d0 and 79 <= s["pointer"] - 128 <= 82
     print(("ok   " if r else "FAIL ") + f"ghost drifts towards the player: distance {d0 // 32} -> {d1 // 32} px")
     ok &= r
-    # skeleton: walks, several directions over time
-    k, s = gm.go_near(SKEL, 0, dx=20)
-    dirs, pos = set(), set()
-    for _ in range(300):
-        gm.frame()
-        s = gm.find(k)
-        if s:
-            dirs.add(s["dir"]); pos.add((s["x"], s["y"]))
-    r = len(dirs) >= 2 and len(pos) > 50
+    # skeleton: walks, several directions over time (a second one if the
+    # first happens to keep one way, e.g. heading for the player)
+    for which in range(2):
+        k, s = gm.go_near(SKEL, which, dx=20)
+        dirs, pos = set(), set()
+        for _ in range(300):
+            gm.frame()
+            s = gm.find(k)
+            if s:
+                dirs.add(s["dir"]); pos.add((s["x"], s["y"]))
+        r = len(dirs) >= 2 and len(pos) > 50
+        if r:
+            break
     print(("ok   " if r else "FAIL ") + f"skeleton wanders: {len(dirs)} directions, {len(pos)} positions")
     ok &= r
     # cyclops: line up with it horizontally -> it charges fast
@@ -438,19 +442,89 @@ def strip(gm):
     return r
 
 
-def victory(gm):
-    kp, p = gm.go_near(PRIN, 0, dx=6)
-    gm.put(0, p["x"], p["y"])
-    try:
-        gm.frame(5)
-    except RuntimeError:
-        pass                                                # the game loop has stopped
-    regs = gm.v.mem_get(0xD011, 1)[0], gm.v.mem_get(0xDD00, 1)[0] & 3
-    r = regs[0] & 0x20 and regs[1] == 1
-    vice.do_shot(gm.v, os.path.join(vice.ROOT, "screenshots", "victory.png"))
-    print(("ok   " if r else "FAIL ") + f"princess reached -> title picture "
-          f"($d011=${regs[0]:02x}, VIC bank {3 - regs[1]})")
-    return r
+def gates(gm):
+    """the locked gates (mygates.s): shut without the key; with it, touching
+    the gate opens it (map tiles grass, collision bits clear) and the player
+    walks through. The prison's gate starts the rescue: Conan steps aside,
+    the princess walks out, then the title picture (VIC bank 2, bitmap mode)."""
+    v, a = gm.v, vice.addr
+    ok = True
+    n = 3
+    t = v.mem_get(a("gate_t"), n + 1)
+    tl, th = v.mem_get(a("gate_tile_lo"), t[n]), v.mem_get(a("gate_tile_hi"), t[n])
+    p = v.mem_get(a("gate_p"), n + 1)
+    pl, ph = v.mem_get(a("gate_path_lo"), p[n]), v.mem_get(a("gate_path_hi"), p[n])
+    pm = v.mem_get(a("gate_path_mask"), p[n])
+    bx0, bx1 = v.mem_get(a("gate_bx0"), n), v.mem_get(a("gate_bx1"), n)
+    by0, by1 = v.mem_get(a("gate_by0"), n), v.mem_get(a("gate_by1"), n)
+    v.mem_set(a("debug_freeze_enemies"), [1])           # (nobody in the way)
+
+    def state(c):
+        tiles = [v.mem_get(tl[i] | th[i] << 8, 1)[0] for i in range(t[c], t[c + 1])]
+        bits = [v.mem_get(pl[i] | ph[i] << 8, 1)[0] & ~pm[i] & 0xFF for i in range(p[c], p[c + 1])]
+        return all(x == 1 for x in tiles) and not any(bits), not any(x == 1 for x in tiles) and all(bits)
+
+    # where the player stands to touch each gate, and the way through
+    spots = [((bx0[0] + bx1[0]) // 2, by1[0], ["W"], lambda x, y: y < by0[0]),        # red: from the south
+             (bx1[1], (by0[1] + by1[1]) // 2, ["A"], lambda x, y: x < bx0[1]),        # green: from the east
+             (bx1[2], (by0[2] + by1[2]) // 2, None, None)]                             # blue: the rescue
+    names = ("red door", "green gate", "blue gate")
+    for c, (x, y, keys, past) in enumerate(spots):
+        if keys is None:                                 # the princess must be there
+            v.mem_set(a("debug_freeze_enemies"), [0])
+            gm.go_near(PRIN, 0, dx=12)
+        v.mem_set(a("has_key") + c, [0])
+        gm.put(0, x * 256 + 128, y * 256 + 128)
+        gm.frame(15)
+        shut = state(c)[1] and v.mem_get(a("gate_open") + c, 1)[0] == 0
+        v.mem_set(a("has_key") + c, [1])
+        gm.put(0, x * 256 + 128, y * 256 + 128)
+        for _ in range(15):                             # (a teleport: a redraw first)
+            gm.frame()
+            if v.mem_get(a("gate_open") + c, 1)[0]:
+                break
+        opened = state(c)[0] and v.mem_get(a("gate_open") + c, 1)[0] == 1
+        if keys is None:
+            break
+        vice.set_keys(v, keys)
+        through = False
+        for _ in range(60):
+            gm.frame()
+            s0 = gm.sprites()[0]
+            if past(s0["gxhi"], s0["gyhi"]):
+                through = True
+                break
+        vice.set_keys(v, [])
+        if c == 0:
+            vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "gate_red.png"))
+        r = shut and opened and through
+        print(("ok   " if r else "FAIL ") + f"{names[c]}: shut without its key {shut}, opens with it "
+              f"{opened}, walked through {through}")
+        ok &= r
+    # the rescue
+    phases, shot, prin_x = [], False, None
+    regs = (0, 0)
+    for _ in range(600):
+        try:
+            gm.frame()
+        except RuntimeError:
+            break                                           # the game loop has stopped
+        ph = v.mem_get(a("cut_phase"), 1)[0]
+        if not phases or phases[-1] != ph:
+            phases.append(ph)
+        pr = [s for s in gm.sprites() if s["controller"] == PRIN]
+        if pr:
+            prin_x = pr[0]["gxhi"]
+        if ph == 3 and not shot:
+            vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "rescue.png"))
+            shot = True
+    regs = v.mem_get(0xD011, 1)[0], v.mem_get(0xDD00, 1)[0] & 3
+    won = bool(regs[0] & 0x20 and regs[1] == 1)
+    r = opened and shut and [q for q in phases if q][:3] == [1, 2, 3] and prin_x is not None and prin_x >= 4 * 8 + 2 and won
+    vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "victory.png"))
+    print(("ok   " if r else "FAIL ") + f"{names[2]}: shut without its key {shut}, opens with it {opened}; "
+          f"rescue phases {phases}, princess out at char x {prin_x}, title picture {won}")
+    return ok and r
 
 
 def main(argv):
@@ -461,7 +535,7 @@ def main(argv):
         ok = True
         for name, fn in (("wizard", wizard), ("behaviour", behaviour), ("sword", sword),
                          ("hitbox", hitbox), ("contact", contact), ("health", health),
-                         ("items", items), ("strip", strip), ("victory", victory)):
+                         ("items", items), ("strip", strip), ("gates", gates)):
             if what in (name, "all"):
                 ok &= fn(gm)
     finally:

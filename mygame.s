@@ -91,6 +91,7 @@
 #import "hitbox.s"
 #import "myagsp.s"
 #import "mydraw.s"
+#import "mygates.s"          // (before myenemies.s: its constants)
 #import "mycontrol.s"
 #import "myenemies.s"
 #import "myui.s"
@@ -172,7 +173,9 @@ main:
 	jsr ag_init            // draw the ring, start the raster IRQs
 forever:
     jsr readkb
+	jsr cut_input          // the rescue: scripted keys (mygates.s)
 	jsr control_player
+	jsr gate_update        // locked gates, the rescue's clock
 	jsr exec_controllers
 	jsr spawn_update       // monsters coming into range
 	jsr exec_animations

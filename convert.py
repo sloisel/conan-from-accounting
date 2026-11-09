@@ -1,5 +1,8 @@
 import re
+import sys
 import numpy as np
+sys.path.insert(0, 'tools')
+import map_extras     # fence, locked gates, the prison (tools/map_extras.py)
 
 recharset = re.compile(r'charset_data[^;]*;')
 rechartileset = re.compile(r'chartileset_data[^;]*;')
@@ -25,6 +28,18 @@ with open('ultimate.asm') as f:
             grass = k
         if chartilesettag[k] == "$00":
             chartilesettag[k] = "$ff"
+    # the additions: new chars and tiles, map edits
+    h = lambda a: [int(x[1:], 16) for x in a]
+    cs_i, tags_i, map_i = h(charset), h(chartilesettag), h(mapdata)
+    tc_i = [h(chartileset[t * 16:t * 16 + 16]) for t in range(len(chartileset) // 16)]
+    col_i = h(chartilesetcolor)
+    map_extras.apply(cs_i, tc_i, col_i, tags_i, map_i)
+    fmt = lambda v: "$ff" if v == 0xFF else "$%02X" % v
+    charset = np.array([fmt(v) for v in cs_i])
+    chartilesettag = np.array([fmt(v) for v in tags_i])
+    mapdata = np.array([fmt(v) for v in map_i])
+    chartileset = np.array([fmt(v) for t in tc_i for v in t])
+    chartilesetcolor = np.array([fmt(v) for v in col_i])
     for j in range(64):
         for k in range(64):
             uu = int(mapdata[j*64+k][1:],16)

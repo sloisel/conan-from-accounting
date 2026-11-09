@@ -48,7 +48,7 @@ sprites_end:
 clip_blocks: .fill clipList.size(), clipList.get(i)
 .for (var i = 0; i < clipList.size(); i++) {
     .var a0 = clipList.get(i) * 64
-    .assert "clip block above the map's glyphs", a0 < charsetaddr || a0 >= charsetaddr + $aa * 8, true
+    .assert "clip block above the map's glyphs", a0 < charsetaddr || a0 >= charsetaddr + $b8 * 8, true
     .assert "clip block clear of block $ff (blank sprite block, glyph $ff)", a0 + 64 <= UI_BLANK_BLK * 64, true
     .assert "clip block clear of the status strip's pictures and AG_ALT's mirror",
             a0 >= (UI_BLK + 5) * 64 || a0 + 64 <= UI_BLK * 64, true

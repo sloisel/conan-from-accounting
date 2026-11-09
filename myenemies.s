@@ -16,7 +16,7 @@
 //   cyclops   patrols; charges when the player lines up with it
 //   jelly     turns on the spot, sinks, resurfaces near the player
 //   wizard    friendly, near the start: hands over the sword, then vanishes
-//   princess  at the pond, behind her guards: touch her to win
+//   princess  in her prison by the pond: opening it wins (mygates.s)
 
 .const T_BLOB = 4
 .const T_SKEL = 6
@@ -371,6 +371,7 @@ en_pd:                          // no hits or contact: just the distance
 // Returns C = 1 if the monster is gone (the caller must just return).
 en_common:
     lda debug_freeze_enemies
+    ora cut_phase               // (the rescue: everyone keeps still)
     beq !+
     jsr control_coords
     sec
@@ -553,6 +554,7 @@ ed_show:
 // (SPAWN_PER_FRAME points per frame; SPAWN_GRACE: see spawns.s)
 spawn_update:
     lda debug_freeze_enemies
+    ora cut_phase
     bne su_end
     lda spawn_grace
     beq !+
@@ -1062,18 +1064,31 @@ wz_done:
     rts
 
 control_prin:
+    lda cut_phase
+    cmp #2
+    beq cp_walk
     jsr en_common
     bcc !+
     rts
-!:  lda en_ax
-    cmp #14
-    bcs !+
-    lda en_ay
-    cmp #16
-    bcs !+
-    jmp victory
 !:  lda #0
     jsr sprite_anim_to
+    jmp en_finish
+cp_walk:                        // the rescue: out through the open gate
+    lda sprite_data_2+sprite_global_xhi,x
+    cmp #PRIN_OUT_X
+    bcc !+
+    lda #3                      // outside: the pause (mygates.s cut_update)
+    sta cut_phase
+    lda #0
+    sta cut_t
+    jmp en_finish
+!:  lda sprite_data_2+sprite_global_xlo,x
+    clc
+    adc #32*EN_THINK            // 1 px per frame
+    sta sprite_data_2+sprite_global_xlo,x
+    lda sprite_data_2+sprite_global_xhi,x
+    adc #0
+    sta sprite_data_2+sprite_global_xhi,x
     jmp en_finish
 
 // ---- the wizard's message ----------------------------------------------

@@ -61,7 +61,9 @@
 .const HEART_LIFE   = 200               // thinks (8 s) before a dropped heart goes
 
 .const AG_FIRST_LINE = 47
-.const AG_T_LINE    = 81              // first visible line
+.const AG_T_LINE    = 81              // first line of row 0 at fine 0 (black: the
+                                     // window shows from line 82, like the sprites)
+.const AG_UNBLANK_DLY = 8            // ag_wr_norm: 5-cycle loops to line 81's right border
 .const AG_BOT_LINE  = 246
 .const AG_SPRITE_YMIN = 81            // sprite y register (first line y+1)
 .const AG_SPRITE_DY = 68              // sprite y = (world - camera)/32 + this
@@ -265,10 +267,8 @@ pr_ydone:
     stx n_botd011
     ora #$60                // blank frame: stay in the invalid (black) mode
     sta n_norm
-!:  ldx p_fine              // n_arm: written in the hblank of line V;
-    beq !+                  // if row 0 starts on line 81 it also unblanks
-    ora #$60
-!:  sta n_arm
+!:  ora #$60                // n_arm: written in the hblank of line V
+    sta n_arm               // (still black: the window starts at line 82)
     lda p_xs
     and #7
     ora #vichposval
@@ -306,10 +306,10 @@ pr_ydone:
     and #3
     sta ag_o+1              // visible offset of slot 1023
     jsr ag_sw_row
-    lda #AG_D018_MAIN       // a pointer row starting by line 83 is too close
-    ldx n_swB1              // for the IRQ path: switch right after unblanking
-    beq !+
-    cpx #84
+    lda #AG_D018_MAIN       // a pointer row starting by line 85 is too close
+    ldx n_swB1              // for the IRQ path (the top IRQ runs into line
+    beq !+                  // 82): switch right after unblanking
+    cpx #86
     bcs !+
     lda #AG_D018_ALT
 !:  sta n_d018aft
@@ -861,17 +861,36 @@ ag_wr_arm:
     lda n_d018aft
 !:  cpy $d012
     bne !-
+    // Leave the blanking mode in line 81's right border, so the window starts
+    // at line 82 like the sprites (which cannot start on 81: their DMA there
+    // would fall into this code). The write must land after line 81's last
+    // pixel (cycle ~55) and before line 82's first (~16); sprites on line 82
+    // stall the CPU from 81:55 to 82:10, which still lands it in time.
+    ldy p_fine
+    beq ag_un0
+    sta $d018               // (line 81 is no badline: row 0 is fetched)
+    ldy #AG_UNBLANK_DLY
+!:  dey
+    bne !-
 ag_wr_norm:
-    stx $d011               // leave the blanking mode: window starts
-    sta $d018               // after row 0's fetch (halted till cycle 55 if
-                            // line 81 is that badline: lands on cycle 58)
+    stx $d011               // 81:55..62
+    jmp ag_un_done
+ag_un0:                     // fine 0: line 81 is row 0's badline: the CPU is
+    nop                     // halted in this store from cycle 12, which then
+    nop                     // lands at 81:55..58 (after row 0's fetch)
+ag_wr_norm0:
+    stx $d011
+    sta $d018
+ag_un_done:
     ldx #0                  // first pointer row still to schedule
     cmp #AG_D018_ALT
     bne ti_sched
-    ldx #AG_D018_MAIN       // early switch (row on line 82/83): switch back
+    ldx #AG_D018_MAIN       // early switch (row on line 82..85): switch back
     lda n_swB1              // right after that badline's fetch, here
-!:  cmp $d012
-    bne !-
+!:  cmp $d012               // (wait while before it: never a whole frame)
+    beq !+
+    bcs !-
+!:
     nop
     nop
     nop

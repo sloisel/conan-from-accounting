@@ -127,7 +127,7 @@ def main():
                          ("contact", monster_check.contact),
                          ("health", monster_check.health), ("items", monster_check.items),
                          ("strip", monster_check.strip),
-                         ("victory", monster_check.victory)):
+                         ("gates", monster_check.gates)):
             check(fn(gm), f"monsters: {name} checks")
         v.close()
     finally:

@@ -5,11 +5,14 @@ asm := $(wildcard *.s)
 sprites.s: mysprites.txt mksprites.py
 	python3 mksprites.py > sprites.s
 
-ultimate.s: ultimate.asm convert.py
+ultimate.s: ultimate.asm convert.py tools/map_extras.py
 	python3 convert.py > ultimate.s
 
-spawns.s: ultimate.s tools/gen_spawns.py
+spawns.s: ultimate.s tools/gen_spawns.py tools/map_extras.py
 	python3 tools/gen_spawns.py > spawns.s
+
+gates.s: ultimate.s tools/gen_gates.py tools/map_extras.py
+	python3 tools/gen_gates.py > gates.s
 
 hitbox.s: mysprites.txt tools/gen_hitbox.py
 	python3 tools/gen_hitbox.py > hitbox.s
