@@ -77,14 +77,10 @@ player_index: index(player_list)
 sword_anim: anim(sword_list)
 sword_index: index(sword_list)
 
-.var star_list = List().add(
-	10,sp0+50,10,sp0+51,10,sp0+52,10,sp0+53,0
-)
-star_anim: anim(star_list)
-star_index: index(star_list)
-controllers: .word control_nop, control_sword, control_basic
-animations: .word player_anim, sword_anim, star_anim
-indices: .word player_index, sword_index, star_index
+// controller numbers: 0 player, 2 sword, 4.. monsters (myenemies.s T_*)
+controllers: .word control_nop, control_sword, control_blob, control_skel, control_ghost, control_cycl, control_jelly, control_wiz, control_prin
+animations: .word player_anim, sword_anim, blob_anim, skel_anim, ghost_anim, cycl_anim, jelly_anim, wiz_anim, prin_anim
+indices: .word player_index, sword_index, blob_index, skel_index, ghost_index, cycl_index, jelly_index, wiz_index, prin_index
 .segment MAIN
 
 // camera: player shown at (160, 83) of the 304x166 AGSP window
@@ -163,8 +159,13 @@ control_move_ok:
 
 
 control_player_keyboard:
-	lda keyboard+4
+	lda has_sword            // no sword yet: J does nothing
+	bne !+
+	lda #4
+	bne cpk_sword
+!:	lda keyboard+4
 	and #4
+cpk_sword:
 	sta player_sword
 	bne control_direction
 	jmp update_vel0
@@ -202,7 +203,14 @@ update_vel:
 	set8 sprite_data_2+sprite_dxhi:dir_x+1,x
 	set8 sprite_data_2+sprite_dylo:dir_y,x
 	set8 sprite_data_2+sprite_dyhi:dir_y+1,x
-	ldx #0
+	lda player_hurt          // knocked back by a monster
+	cmp #30
+	bcc !+
+	set8 sprite_data_2+sprite_dxlo:knock_dx
+	set8 sprite_data_2+sprite_dxhi:knock_dx+1
+	set8 sprite_data_2+sprite_dylo:knock_dy
+	set8 sprite_data_2+sprite_dyhi:knock_dy+1
+!:	ldx #0
 	jsr control_move
 	sub16 ::sprite_data_2+sprite_global_xlo:sprite_data_2+sprite_global_xhi:#<maxx+delx:#>maxx+delx
 	bcs rightside
@@ -232,11 +240,12 @@ topbottomok:
 
 control_coords:
 	sub16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:smooth_x:smooth_x+1
-	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
-	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
-	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
-	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
-	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
+	.for (var i = 0; i < 5; i++) {     // signed: sprites left of the camera stay negative
+	lda sprite_data_2+sprite_xhi,x
+	cmp #$80
+	ror sprite_data_2+sprite_xhi,x
+	ror sprite_data_2+sprite_xlo,x
+	}
 	add16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:#<20:#>20
 	sub16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:smooth_y:smooth_y+1
 	.for (var i = 0; i < 5; i++) {     // signed: sprites above the camera stay negative
@@ -252,7 +261,15 @@ control_coords:
 	// visible rows); one entirely above it is parked at y=0 (top border).
 	lda #0
 	sta sprite_data_2+sprite_clip,x
-	lda sprite_data_2+sprite_yhi,x
+	lda sprite_data_2+sprite_xhi,x     // off screen sideways (x < 0 or >= 344)?
+	bmi control_coords_park
+	beq !+
+	cmp #2
+	bcs control_coords_park
+	lda sprite_data_2+sprite_xlo,x
+	cmp #<344
+	bcs control_coords_park
+!:	lda sprite_data_2+sprite_yhi,x
 	bne control_coords_park
 	lda sprite_data_2+sprite_y,x
 	cmp #AG_SPRITE_YMIN
@@ -298,10 +315,6 @@ control_sword_stab:
 	rts
 
 control_nop:
-	rts
-
-control_basic:
-	jsr control_coords
 	rts
 
 control_player:
@@ -382,9 +395,7 @@ sprite_alloc:
     bcc sprite_alloc_ok
     rts
 sprite_alloc_ok:
-    inc sprite2_count
-    lda sprite_data_2+sprite_order,x
-    tax
+    inc sprite2_count          // sprites are kept contiguous (sprite_free)
     tya
 	sta sprite_data_2+sprite_controller,x
     clc
@@ -423,124 +434,12 @@ sprite_init_load_anim:
     lda $ffff,y
     rts
 
-sprite_from_tile:
-    cpx #64
-    bcs finish2
-    cpy #64
-    bcs finish2
-//xxxx: jmp xxxx
-	stx temp4
-	sty temp4+1
-sprite_reader:
-    lda $ffff,x
-	tay
-	lda tiletag,y
-    bmi finish
-	tay
-	set8 sprite_writer+1:sprite_reader+1
-	set8 sprite_writer+2:sprite_reader+2
-	lda empty_tile_numbers,y
-sprite_writer:
-	sta $ffff,x
-    jsr sprite_alloc
-	bcs finish
-	lda #0
-	jsr sprite_init
-
-	lda temp4
-	asl
-	asl
-	clc
-	adc #2
-	sta sprite_data_2+sprite_global_xhi,x
-
-	lda temp4+1
-	asl
-	asl
-	adc #2
-	sta sprite_data_2+sprite_global_yhi,x
-
-	lda #0
-	sta sprite_data_2+sprite_global_ylo,x
-	sta sprite_data_2+sprite_global_xlo,x
-finish:
-	ldx temp4
-	ldy temp4+1
-finish2:
-//	jmp finish2
-	rts
-
-sprite_from_tiles:
-	lda #0
-	sta sprite_reader+1
-	lda smooth_x
-	lsr
-	lsr
-	tax
-	dex
-	stx temp
-	clc
-	adc #11
-	sta temp+1
-	lda smooth_y
-	lsr
-	lsr
-	tay
-	dey
-	adc #4
-	sta sprite_from_tiles_cpy
-	tya
-	lsr
-	ror sprite_reader+1
-	lsr
-	ror sprite_reader+1
-	clc
-	adc #>map
-	sta sprite_reader+2
-	jsr sprite_tile_row
-	jsr sprite_tile_next_row
-sprite_from_tiles_loop:
-	ldx temp
-	jsr sprite_from_tile
-	ldx temp+1
-	jsr sprite_from_tile
-	jsr sprite_tile_next_row
-sprite_from_tiles_cpy:
-	cpy #0
-	bne sprite_from_tiles_loop
-	jsr sprite_tile_row
-	rts
-
-sprite_tile_row:
-	ldx temp
-sprite_tile_row_loop:
-	jsr sprite_from_tile
-	cpx temp+1
-	beq sprite_tile_row_end
-	inx
-	jmp sprite_tile_row_loop
-sprite_tile_row_end:
-	rts
-
-sprite_tile_next_row:
-	iny
-	lda sprite_reader+1
-	clc
-	adc #64
-	sta sprite_reader+1
-	sta sprite_writer+1
-	lda #0
-	adc sprite_reader
-	sta sprite_reader
-	sta sprite_writer
-	rts
-
 exec_controllers:
 	ldx #0
 	stx control_index
 exec_controllers_loop:
 	cpx sprite2_count
-	beq exec_controllers_end
+	bcs exec_controllers_end               // (>=: a controller may free sprites)
 	ldy sprite_data_2+sprite_controller,x
 	lda controllers,y
 	sta exec_controllers_jsr+1
@@ -560,7 +459,7 @@ exec_animations:
 //	stx control_index
 exec_animations_loop:
 	cpx sprite2_count
-	beq exec_animations_end
+	bcs exec_animations_end               // (>=: a controller may free sprites)
 	ldy sprite_data_2+sprite_controller,x
 	lda animations,y
 	sta row_map_ptr
@@ -586,6 +485,14 @@ exec_animations_skip:
 	tay
 	lda spritecolors-sp0,y
 	sta sprite_data_2+sprite_color,x
+	lda sprite_data_2+sprite_flash,x   // just hit: blink white
+	beq ea_noflash
+	dec sprite_data_2+sprite_flash,x
+	and #4
+	beq ea_noflash
+	lda #1
+	sta sprite_data_2+sprite_color,x
+ea_noflash:
 	inx
 //	foo:jmp foo
 	jmp exec_animations_loop

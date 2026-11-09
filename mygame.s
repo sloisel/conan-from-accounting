@@ -34,7 +34,14 @@
 .var sprite_order=32*18
 .var sprite_clip=32*19       // rows hidden above the window (myvic2.s clip_sprites)
 .var sprite_srcptr=32*20     // animation frame of a clipped sprite (debug/tests)
-.var sprite_total_size=32*21
+.var sprite_state=32*21      // monsters (myenemies.s): behaviour state
+.var sprite_timer=32*22
+.var sprite_hp=32*23
+.var sprite_spawn=32*24      //   spawn point it came from
+.var sprite_flash=32*25      //   hit flash / invulnerability countdown
+.var sprite_dir=32*26
+.var sprite_nfields=27
+.var sprite_total_size=32*sprite_nfields
 .var sidinit=$e000
 .var sidplay=$e003
 
@@ -75,9 +82,11 @@
 #import "ultimate.s"
 #import "sprites.s"
 #import "myloader.s"
+#import "spawns.s"
 #import "myagsp.s"
 #import "mydraw.s"
 #import "mycontrol.s"
+#import "myenemies.s"
 #import "myvic2.s"
 #import "mylib.s"
 
@@ -90,6 +99,7 @@ sprite_data_2: .fill sprite_order,0
 sprite_data_2_order: .fill 32,i
 sprite_data_2_clip: .fill 32,0
 sprite_data_2_srcptr: .fill 32,0
+sprite_data_2_monster: .fill 6*32,0      // state .. dir
 bitset: .byte 1,2,4,8,16,32,64,128
 bitclear: .byte 255-1,255-2,255-4,255-8,255-16,255-32,255-64,255-128
 
@@ -147,14 +157,7 @@ main:
 	jsr sprite_alloc
 	lda #0
 	jsr sprite_init
-.var xx=3
-.var yy=55
-.var xxyy=(64*yy)+map
-	ldx #xx
-	ldy #yy
-	set8 sprite_reader+1:#<xxyy
-	set8 sprite_reader+2:#>xxyy
-	jsr sprite_from_tile
+	jsr map_clear_markers  // spawn markers in the map become grass
 	jsr control_player     // place the camera
 	jsr exec_controllers
 	jsr exec_animations
@@ -164,8 +167,10 @@ forever:
     jsr readkb
 	jsr control_player
 	jsr exec_controllers
+	jsr spawn_update       // monsters coming into range
 	jsr exec_animations
 	jsr clip_sprites       // sprites sliding in at the top edge
+	jsr player_effects     // hurt flash
 	jsr scroll_update      // draw newly exposed map edges
 	jsr ag_commit_frame    // hand position + sprites to the IRQ, wait a frame
 	jmp forever

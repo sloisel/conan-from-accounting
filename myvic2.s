@@ -72,7 +72,7 @@ clip_sprites:
     ldx #0
 cs_loop:
     cpx sprite2_count
-    beq cs_done
+    bcs cs_done
     lda sprite_data_2+sprite_clip,x
     beq cs_next
     ldy clip_next

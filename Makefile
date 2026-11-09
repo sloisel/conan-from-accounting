@@ -8,6 +8,9 @@ sprites.s: mysprites.txt mksprites.py
 ultimate.s: ultimate.asm convert.py
 	python3 convert.py > ultimate.s
 
+spawns.s: ultimate.s tools/gen_spawns.py
+	python3 tools/gen_spawns.py > spawns.s
+
 mygame.d64: Makefile KickAss.cfg $(asm)
 	java -jar KickAss.jar mygame.s
 

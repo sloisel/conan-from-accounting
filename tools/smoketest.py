@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vice
 import game_check
+import monster_check
 
 ROOT = vice.ROOT
 TOOL = os.path.join(ROOT, "tools", "vice.py")
@@ -38,11 +39,12 @@ def main():
         v.frames(5)
 
         n, f = sprites(v)
-        check(n == 3, f"3 sprites allocated (player, sword, enemy): got {n}")
-        check(f(5, 2) == 4, f"enemy uses controller 4 (control_basic): got {f(5, 2)}")
-        check(f(10, 2) == 14 and f(12, 2) == 222, "enemy placed at its map tile (3,55)")
+        check(n == 3 and f(5, 2) == 14,
+              f"at the start: player, sword and the old wizard (monsters stream in later): {n} sprites")
+        spawns = vice.addr("spawn_ty") - vice.addr("spawn_tx")
+        check(spawns >= 80, f"spawn table: {spawns} monster spawn points")
         map_tile = v.mem_get(vice.addr("map") + 55 * 64 + 3, 1)[0]
-        check(map_tile == 1, "enemy spawn tile replaced with grass")
+        check(map_tile == 1, "spawn marker tiles in the map turned into grass")
 
         x0 = f(10, 0)
         vice.set_keys(v, ["D"])
@@ -52,6 +54,7 @@ def main():
         n, f = sprites(v)
         check(f(10, 0) > x0, f"player walks right with D: gx {x0} -> {f(10, 0)}")
 
+        v.mem_set(vice.addr("has_sword"), [1])          # (monster_check tests the wizard)
         vice.set_keys(v, ["J"])
         v.frames(3)
         n, f = sprites(v)
@@ -67,8 +70,8 @@ def main():
         vice.set_keys(v, [])
         v.frames(2)
         n, f = sprites(v)
-        on_screen = 30 < f(2, 2) < 250
-        check(on_screen, f"enemy scrolls into view after walking north: y={f(2, 2)}")
+        blobs = [i for i in range(2, n) if f(5, i) == 4 and 81 <= f(2, i) < 250]
+        check(blobs, f"a blob spawned and is on screen after walking north: {n - 2} monster(s)")
         os.makedirs(SHOTS, exist_ok=True)
         vice.do_shot(v, os.path.join(SHOTS, "smoketest.png"))
 
@@ -81,6 +84,18 @@ def main():
               f"{crossings} frames with a sprite there, {bad} bad")
         bad = game_check.check_top_clip(v, verbose=False)
         check(bad == 0, f"sprites slide in at the top edge (clipped 1..20 rows): {bad} bad")
+        v.close()
+
+        # gameplay, in a fresh game (the checks above froze the monsters)
+        subprocess.run([TOOL, "start"], check=True, capture_output=True)
+        v = vice.Vice()
+        num = v.checkpoint(vice.addr("forever"))
+        v.run_until_hit(num, 60)
+        gm = monster_check.Game(v)
+        for name, fn in (("wizard", monster_check.wizard), ("behaviour", monster_check.behaviour),
+                         ("sword", monster_check.sword), ("contact", monster_check.contact),
+                         ("victory", monster_check.victory)):
+            check(fn(gm), f"monsters: {name} checks")
         v.close()
     finally:
         subprocess.run([TOOL, "stop"], capture_output=True)

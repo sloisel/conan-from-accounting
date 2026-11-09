@@ -255,6 +255,20 @@ def run(v, steps=200, seed=1, verbose=True):
     return failures
 
 
+def ensure_test_monster(v):
+    """Freeze the monsters (no behaviour, no (de)spawning) and make sure
+    sprite 2 exists, so tests can place it freely."""
+    a = vice.addr
+    v.mem_set(a("debug_freeze_enemies"), [1])
+    if v.mem_get(a("sprite2_count"), 1)[0] < 3:
+        base = a("sprite_data_2")
+        sp0 = 0x2000 // 64
+        for field, val in ((5, 4), (6, 0), (7, 1), (8, 255), (4, sp0 + 49), (3, 14),
+                           (19, 0), (21, 0), (23, 1), (25, 0)):
+            v.mem_set(base + 32 * field + 2, [val])
+        v.mem_set(a("sprite2_count"), [3])
+
+
 def check_top_clip(v, verbose=True):
     """Put the player so the enemy (logical sprite 2, fixed in the world)
     straddles the top edge by k = 1..20 rows. Each time the hardware sprite
@@ -263,10 +277,12 @@ def check_top_clip(v, verbose=True):
     Returns the number of failures."""
     a = vice.addr
     base = a("sprite_data_2")
-    g = v.mem_get(base + 32 * 9, 128)
-    ex, ey = g[2] | g[34] << 8, g[66] | g[98] << 8      # enemy global x, y
+    ensure_test_monster(v)
+    ex, ey = 14 * 256, 222 * 256                        # put the test monster here
+    for off, val in ((32 * 9, ex & 255), (32 * 10, ex >> 8), (32 * 11, ey & 255), (32 * 12, ey >> 8)):
+        v.mem_set(base + off + 2, [val])
     sp0 = 0x2000 // 64
-    frames = [v.mem_get((sp0 + f) * 64, 63) for f in range(50, 54)]
+    frames = [v.mem_get((sp0 + f) * 64, 63) for f in range(49, 85)]   # any monster frame
     ref = Ref(v)
     fails = 0
     for k in list(range(1, 21)) + [0, 21, 25]:
@@ -309,6 +325,7 @@ def check_edges(v, verbose=True, frames=7 * 130):
     Returns (bad frames, frames with a sprite on an edge switch line)."""
     a = vice.addr
     base = a("sprite_data_2")
+    ensure_test_monster(v)
     ref = Ref(v)
     bad_frames = edge = 0
     def put(i, x, y):
