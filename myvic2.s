@@ -30,19 +30,27 @@ sprite_enable_bits:
 // ---- top-edge sprite clipping ------------------------------------------
 // A sprite straddling the top of the AGSP window is displayed from the
 // window's first sprite line, using a spare sprite block that holds only its
-// visible rows. Spare blocks: $3540-$37ff (11 blocks between the sprite data
-// and the charset), used as two sets of 5 that alternate every frame, so the
-// set being displayed is never the one being written.
-.const CLIP_BLOCK0 = $3540 / 64
+// visible rows. Two sets of 5 spare blocks alternate every frame, so the set
+// being displayed is never the one being written. The blocks: $3740-$37ff
+// and unused glyph space at the top of the charset (the map uses codes up to
+// $a9; $3ea8-$3ee7 holds the AGSP pointer-slot glyphs, $3540-$373f their
+// sprite blocks).
 .const CLIP_SET = 5
 
 .segment SPRITES
 sprites_end:
-.assert "spare clip sprite blocks are free", sprites_end <= CLIP_BLOCK0 * 64, true
-.assert "clip blocks end below the charset", (CLIP_BLOCK0 + 2 * CLIP_SET) * 64 <= charsetaddr, true
+.assert "AGSP pointer-slot blocks are free", sprites_end <= AG_PTRCODE * 64, true
 
 .segment TABLES
-clip_base:   .byte CLIP_BLOCK0, CLIP_BLOCK0 + CLIP_SET
+.var clipList = List().add($dd, $de, $df, $f7, $f8, $f9, $fc, $fd, $fe, $ff)
+clip_blocks: .fill clipList.size(), clipList.get(i)
+.for (var i = 0; i < clipList.size(); i++) {
+    .var a0 = clipList.get(i) * 64
+    .assert "clip block above the map's glyphs", a0 < charsetaddr || a0 >= charsetaddr + $aa * 8, true
+    .assert "clip block clear of pointer-slot glyphs", a0 + 64 <= AG_PTRGLYPH || a0 >= AG_PTRGLYPH + 64, true
+    .assert "clip block clear of pointer-slot blocks", a0 >= (AG_PTRCODE + 8) * 64 || a0 + 64 <= AG_PTRCODE * 64, true
+}
+clip_base:   .byte 0, CLIP_SET
 clip_parity: .byte 0
 clip_next:   .byte 0
 clip_limit:  .byte 0
@@ -56,7 +64,7 @@ clip_sprites:
     eor #1
     sta clip_parity
     tay
-    lda clip_base,y
+    lda clip_base,y         // index into clip_blocks
     sta clip_next
     clc
     adc #CLIP_SET
@@ -74,7 +82,8 @@ cs_loop:
     sta sprite_data_2+sprite_y,x
     jmp cs_next
 !:  inc clip_next
-    sty clip_block
+    lda clip_blocks,y
+    sta clip_block
     jsr clip_one
 cs_next:
     inx

@@ -23,15 +23,22 @@
 // 0..38 (every row that can contain those slots) but holds the *map chars*
 // in 1016..1023. Only for the badline whose row fetches those slots, $d018
 // points at AG_ALT: switched on line B-1 and switched back while the CPU is
-// halted by that badline (write lands on cycle 56-58). Sprites on line B
-// (and hardware sprite 0 on line B+1) read their pointer from AG_ALT, i.e.
-// may show one wrong pixel row while crossing that row.
+// halted by that badline. Sprites displayed on those few lines therefore
+// fetch their pointer from AG_ALT. To make that harmless, AG_ALT's slot n
+// always holds the dedicated code AG_PTRCODE+n: as a character its glyph is
+// kept equal to the map char of slot n (mydraw.s ap_ptr), and as a sprite
+// block the bottom IRQ fills it with the rows hardware sprite n will show on
+// those lines (ag_fix_rows). No glitch, no cycle-exact timing needed.
 // Sprites must not be displayed on lines 40..81 (cycle-exact code there):
 // control_coords parks sprites above AG_SPRITE_YMIN at y=0.
 
 .const AG_SCREEN    = charbuf1        // $0400
 .const AG_SAFE      = charbuf2        // $0800, 1 KB of $ff
 .const AG_ALT       = $0c00           // pointer-row mirror (loader space, free after load)
+.const AG_PTRCODE   = $d5             // codes/blocks $d5..$dc: see above
+.const AG_PTRGLYPH  = charsetaddr + AG_PTRCODE * 8
+.assert "pointer-slot codes unused by the map", AG_PTRCODE > $b1, true
+.assert "pointer-slot blocks below the charset", (AG_PTRCODE + 8) * 64 <= charsetaddr, true
 .const AG_D018_MAIN = ((AG_SCREEN >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
 .const AG_D018_SAFE = ((AG_SAFE >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
 .const AG_D018_ALT  = ((AG_ALT >> 6) & $f0) | ((charsetaddr >> 10) & $0e)
@@ -80,6 +87,12 @@ n_swB1:   .byte 0     // badlines of rows >= 1 holding the pointer slots, 0 = no
 n_swB2:   .byte 0
 ag_swidx: .byte 0
 ag_irqline: .byte 0
+n_gl:     .fill 8, 0  // raster lines on which sprites may read AG_ALT's slots
+n_gln:    .byte 0
+fr_L:     .byte 0
+fr_li:    .byte 0
+fr_n:     .byte 0
+fr_row:   .byte 0
 ag_o:     .word 0
 ag_B:     .byte 0
 ag_q8:    .byte 0
@@ -112,6 +125,13 @@ ag_init:
     sta AG_SAFE+$300,x
     inx
     bne !-
+    ldx #7                  // AG_ALT's pointer slots: the dedicated codes
+!:  txa
+    clc
+    adc #AG_PTRCODE
+    sta AG_ALT+$3f8,x
+    dex
+    bpl !-
     lda smooth_x+1
     sta ag_cx
     lda smooth_y+1
@@ -269,7 +289,141 @@ pr_ydone:
     bcs !+
     lda #AG_D018_ALT
 !:  sta n_d018aft
+    // lines on which sprites may fetch pointers from AG_ALT (ag_fix_rows)
+    ldx #0
+    lda n_d018top
+    cmp #AG_D018_ALT
+    bne !+
+    lda p_fine
+    bne !+
+    lda #82                 // row 0 on line 81: switched back on 81:58
+    sta n_gl,x
+    inx
+!:  lda n_d018aft
+    cmp #AG_D018_ALT
+    bne gl_rows
+    lda #82                 // early switch: lines 82..B1+1
+!:  sta n_gl,x
+    inx
+    cmp n_swB1
+    beq !+
+    clc
+    adc #1
+    jmp !-
+!:  clc
+    adc #1
+    sta n_gl,x
+    inx
+    lda n_swB2
+    jsr gl_add
+    jmp gl_done
+gl_rows:
+    lda n_swB1
+    jsr gl_add
+    lda n_swB2
+    jsr gl_add
+gl_done:
+    stx n_gln
     rts
+
+// gl_add: lines for a switched row with badline A (0 = none): B and B+1,
+// or B..246 near the bottom (no switch back there)
+gl_add:
+    cmp #0
+    beq gl_none
+    sta n_gl,x
+    inx
+    clc
+    adc #1
+    cmp #AG_BOT_LINE+1
+    bcs gl_none
+    sta n_gl,x
+    inx
+gl_none:
+    rts
+
+// ag_fix_rows: for every line in n_gl and every hardware sprite n shown on
+// it, copy that sprite row from its real frame into block AG_PTRCODE+n.
+// Runs in the bottom IRQ after the sprite registers for the next frame are
+// set (self-modifying code: no zero page shared with the main loop).
+ag_fix_rows:
+    ldx #0
+fr_line:
+    cpx n_gln
+    bne !+
+    rts
+!:  stx fr_li
+    lda n_gl,x
+    sta fr_L
+    ldy #0
+fr_spr:
+    sty fr_n
+    lda $d015
+    and bitset,y
+    beq fr_next
+    tya
+    asl
+    tax
+    lda fr_L
+    clc
+    sbc $d001,x             // row = L - y - 1
+    bcc fr_next
+    cmp #21
+    bcs fr_next
+    sta fr_row
+    asl
+    adc fr_row              // 3 * row
+    sta fr_row
+    lda AG_SCREEN+$3f8,y    // source: the sprite's real frame
+    lsr
+    lsr
+    sta fr_src+2
+    lda AG_SCREEN+$3f8,y
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    clc
+    adc fr_row
+    sta fr_src+1
+    bcc !+
+    inc fr_src+2
+!:  tya                     // destination: block AG_PTRCODE+n
+    clc
+    adc #AG_PTRCODE
+    tax
+    lsr
+    lsr
+    sta fr_dst+2
+    txa
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    clc
+    adc fr_row
+    sta fr_dst+1
+    bcc !+
+    inc fr_dst+2
+!:  ldx #2
+fr_src:
+    lda $ffff,x
+fr_dst:
+    sta $ffff,x
+    dex
+    bpl fr_src
+fr_next:
+    ldy fr_n
+    iny
+    cpy #8
+    bne fr_spr
+    ldx fr_li
+    inx
+    jmp fr_line
 
 // ag_sw_row: note the row showing visible offset ag_o (if visible)
 ag_sw_row:
@@ -465,6 +619,7 @@ ab_done:
     ldx sprite1_count
     lda sprite_enable_bits,x
     sta $d015
+    jsr ag_fix_rows
     jsr sidplay
     lda #<ag_irq_pre
     sta $fffe
@@ -554,9 +709,21 @@ ag_wr_norm:
     stx $d011               // leave the blanking mode: window starts
     sta $d018               // after row 0's fetch (halted till cycle 55 if
                             // line 81 is that badline: lands on cycle 58)
+    ldx #0                  // first pointer row still to schedule
+    cmp #AG_D018_ALT
+    bne ti_sched
+    ldx #AG_D018_MAIN       // early switch (row on line 82/83): switch back
+    lda n_swB1              // right after that badline's fetch, here
+!:  cmp $d012
+    bne !-
+    nop
+    nop
+    nop
+    stx $d018               // halted by the badline: lands on cycle 56..58
+    ldx #1
+ti_sched:
+    stx ag_swidx
     asl $d019               // ack before scheduling the next IRQ
-    lda #0
-    sta ag_swidx
     jsr ag_next
 ti_out:
     pla

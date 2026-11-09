@@ -73,7 +73,12 @@ def main():
         vice.do_shot(v, os.path.join(SHOTS, "smoketest.png"))
 
         bad = game_check.run(v, 500, seed=1, verbose=False)
-        check(bad == 0, f"AGSP display pixel-exact over 500 random scroll frames: {bad} bad")
+        check(bad == 0, f"AGSP display pixel-exact (background and sprites) over "
+                        f"500 random scroll frames: {bad} bad")
+        bad, crossings = game_check.check_edges(v, verbose=False)
+        check(bad == 0 and crossings > 0,
+              f"sprites exact on pointer-switch lines at the window edges: "
+              f"{crossings} frames with a sprite there, {bad} bad")
         bad = game_check.check_top_clip(v, verbose=False)
         check(bad == 0, f"sprites slide in at the top edge (clipped 1..20 rows): {bad} bad")
         v.close()

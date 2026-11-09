@@ -12,9 +12,10 @@
 //            never visible in 38-column mode, but before the step those
 //            slots are the visible column 0 of the next row).
 //
-// Ring slots 1016..1023 double as sprite pointers: their map chars go only
-// to the mirror screen AG_ALT, which also mirrors slots 977..1015 and 0..38
-// (every row that can contain them). See myagsp.s.
+// Ring slots 1016..1023 double as sprite pointers: in the mirror screen
+// AG_ALT (which also mirrors slots 977..1015 and 0..38, every row that can
+// contain them) slot n holds the fixed code AG_PTRCODE+n, whose glyph is set
+// to the map char's glyph here. See myagsp.s.
 
 .const AG_ROWS = 22
 
@@ -116,8 +117,8 @@ ag_map_row:
     rts
 
 // ag_put: store char A, colour ag_k at ring slot ag_s
-// (slots 977..1023 and 0..38 also go to the mirror AG_ALT; 1016..1023,
-// the sprite pointers, only there)
+// (slots 977..1015 and 0..38 also go to the mirror AG_ALT; for 1016..1023,
+// the sprite pointers, the char's glyph is copied to code AG_PTRCODE+n)
 ag_put:
     ldy ag_s+1
     beq ap_low
@@ -151,9 +152,39 @@ ap_col:
     sta $d800,y
     rts
 ap_ptr:
-    sta AG_ALT+$300,y
+    pha
     lda ag_k
     sta $db00,y
+    tya
+    sec
+    sbc #$f8
+    asl
+    asl
+    asl
+    tax                     // glyph offset of code AG_PTRCODE+n
+    pla
+    pha
+    asl
+    asl
+    asl
+    sta ap_g+1              // glyph of char A: charset + 8*A
+    pla
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
+    clc
+    adc #>charsetaddr
+    sta ap_g+2
+    ldy #0
+ap_g:
+    lda $ffff,y
+    sta AG_PTRGLYPH,x
+    inx
+    iny
+    cpy #8
+    bne ap_g
     rts
 
 // ag_build_row: A = wy, X = wx. Fills ag_rbc/ag_rbk with the 11 tiles

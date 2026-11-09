@@ -158,6 +158,7 @@ def ring_diff(v, ref, cx, cy):
     scr = v.mem_get(0x400, 1024)
     col = v.mem_get(0xD800, 1024)
     alt = v.mem_get(0x0C00, 1024)                  # AG_ALT mirror
+    ptrcode = vice.addr("ag_fix_rows") and 0xD5
     S = (40 * cy + cx) % 1024
     bad = []
     for r in range(22):
@@ -166,10 +167,18 @@ def ring_diff(v, ref, cx, cy):
             tile = ref.map[(wy >> 2) * 64 + (wx >> 2)]
             j = (wy & 3) * 4 + (wx & 3)
             slot = (S + 40 * r + c) % 1024
-            got = alt[slot] if slot >= 1016 else scr[slot]
-            if (slot >= 977 or slot <= 38) and alt[slot] != got:
-                bad.append((r, c, slot, "mirror"))
-            if got != ref.tc[j * 64 + tile] or (col[slot] & 15) != (ref.tk[j * 64 + tile] & 15):
+            want = ref.tc[j * 64 + tile]
+            if slot >= 1016:                        # dedicated code + glyph copy
+                n = slot - 1016
+                if alt[slot] != ptrcode + n:
+                    bad.append((r, c, slot, "slot code"))
+                got = want if ref.cs[(ptrcode + n) * 8:(ptrcode + n) * 8 + 8] == \
+                    ref.cs[want * 8:want * 8 + 8] else -1
+            else:
+                got = scr[slot]
+                if (slot >= 977 or slot <= 38) and alt[slot] != got:
+                    bad.append((r, c, slot, "mirror"))
+            if got != want or (col[slot] & 15) != (ref.tk[j * 64 + tile] & 15):
                 bad.append((r, c, slot))
     return bad
 
@@ -177,7 +186,9 @@ def ring_diff(v, ref, cx, cy):
 def bottom_irq(v):
     """Stop at the bottom IRQ of the next frame. Returns that frame's state;
     on return the CPU is a few lines further on (line 246 fully rendered)."""
-    num = v.checkpoint(vice.addr("ag_irq_bot"))
+    # ag_bot_body runs once per frame (bottom IRQ, or chained from a swap IRQ
+    # when the pointer row is at line 245/246); p_* still describe this frame
+    num = v.checkpoint(vice.addr("ag_bot_body"))
     if not v.run_until_hit(num, 10):
         raise RuntimeError("bottom IRQ not reached")
     state = frame_state(v)
@@ -194,7 +205,7 @@ def run(v, steps=200, seed=1, verbose=True):
     a = vice.addr
     gx = a("sprite_data_2") + 32 * 9          # player global x lo/hi, y lo/hi
     failures = 0
-    glitch_frames, glitch_lines_max = 0, 0
+    glitch_frames, glitch_lines_max, crossing = 0, 0, 0
     bottom_irq(v)
     ref = Ref(v)
     vel = (0, 0)
@@ -214,9 +225,14 @@ def run(v, steps=200, seed=1, verbose=True):
         state = bottom_irq(v)
         gl = {}
         (cx, cy, fine, xs), bad, band = check_frame(v, ref, state, gl)
-        if gl:
+        if not state[2] and any(sy < line <= sy + 21 for line in glitch_lines(state)
+                                for _, _, sy, _, _ in state[1].spr):
+            crossing += 1
+        if gl:                       # sprites must be right on switched lines too
             glitch_frames += 1
             glitch_lines_max = max(glitch_lines_max, len(gl))
+            bad = bad + [(line, None, "sprite on pointer-switch line", n)
+                         for line, n in sorted(gl.items())]
         if bad or band:
             failures += 1
             if verbose:
@@ -234,8 +250,8 @@ def run(v, steps=200, seed=1, verbose=True):
             if failures > 5:
                 break
     if verbose:
-        print(f"sprite pixel rows read from the mirror pointers: {glitch_frames} frames, "
-              f"at most {glitch_lines_max} raster line(s) in a frame")
+        print(f"frames with a sprite on a pointer-switch line: {crossing}; "
+              f"wrong sprite rows there: {glitch_frames} frames")
     return failures
 
 
@@ -285,12 +301,56 @@ def check_top_clip(v, verbose=True):
     return fails
 
 
+def check_edges(v, verbose=True, frames=7 * 130):
+    """Pointer-row switching at the window edges. The pointer cells are fixed
+    in the world, so walk the camera diagonally (the ring offset changes
+    every frame) while keeping the enemy at a fixed screen position near the
+    top or bottom edge. Every frame must be pixel-exact, sprites included.
+    Returns (bad frames, frames with a sprite on an edge switch line)."""
+    a = vice.addr
+    base = a("sprite_data_2")
+    ref = Ref(v)
+    bad_frames = edge = 0
+    def put(i, x, y):
+        x, y = min(max(x, 0), 0xFFFF), min(max(y, 0), 0xFFFF)
+        for off, val in ((32 * 9, x & 255), (32 * 10, x >> 8),
+                         (32 * 11, y & 255), (32 * 12, y >> 8)):
+            v.mem_set(base + off + i, [val])
+    for yreg in (81, 84, 88, 222, 230, 238, 244):
+        cam_x, cam_y = 10 * 256, 10 * 256
+        put(0, cam_x + 160 * 32, cam_y + 83 * 32)
+        for _ in range(8):                                # let any redraw finish
+            bottom_irq(v)
+        for step in range(frames // 7):
+            cam_x += 5 * 32
+            cam_y += 3 * 32
+            put(0, cam_x + 160 * 32, cam_y + 83 * 32)     # player -> camera
+            put(2, cam_x + 100 * 32, cam_y + (yreg - 68) * 32)   # enemy on screen
+            state = bottom_irq(v)
+            if state[2]:
+                continue
+            gl = {}
+            _, bad, band = check_frame(v, ref, state, gl)
+            if any(sy < l <= sy + 21 and (l <= 90 or l >= 238) for l in glitch_lines(state)
+                   for _, _, sy, _, _ in state[1].spr):
+                edge += 1
+            if bad or band or gl:
+                bad_frames += 1
+                if verbose and bad_frames <= 5:
+                    print(f"edge y={yreg}: {len(bad)} bad {bad[:2]}, glitch {gl}, "
+                          f"switch {list(state[3])}")
+    return bad_frames, edge
+
+
 def main(argv):
     steps = int(argv[0]) if argv else 200
     seed = int(argv[1]) if len(argv) > 1 else 1
     v = vice.Vice()
     try:
         failures = run(v, steps, seed)
+        eb, ec = check_edges(v)
+        print(f"window-edge pointer switching: {ec} frames with a sprite there, {eb} bad")
+        failures += eb
         clip_fails = check_top_clip(v)
         print(f"top-edge clipping: {23 - clip_fails}/23 positions OK")
         failures += clip_fails

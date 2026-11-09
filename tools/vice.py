@@ -193,7 +193,9 @@ class Vice:
         """Run exactly n video frames (counted on the game's raster IRQ).
         Deterministic and independent of warp/real-time speed."""
         syms = symbols()
-        irq = next(syms[n] for n in ("ag_irq_bot", "irq_bot", "irq") if n in syms)
+        # ag_bot_body: reached once per frame both via the bottom IRQ and via
+        # the swap IRQ chaining into the bottom work
+        irq = next(syms[n] for n in ("ag_bot_body", "ag_irq_bot", "irq_bot", "irq") if n in syms)
         num = struct.unpack_from("<I", self.cmd(0x12, struct.pack(
             "<HHBBBB", irq, irq, 1, 1, 4, 0))[1])[0]
         try:
@@ -290,6 +292,18 @@ def background_app():
     return app
 
 
+def kill_ours():
+    """Quit every VICE launched through our background wrapper (never a VICE
+    the user started themselves), so stale instances cannot pile up."""
+    subprocess.run(["pkill", "-f", os.path.join(ROOT, "build", "x64sc-bg.app")],
+                   capture_output=True)
+    for _ in range(50):
+        if subprocess.run(["pgrep", "-f", os.path.join(ROOT, "build", "x64sc-bg.app")],
+                          capture_output=True).returncode:
+            return
+        time.sleep(0.1)
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -303,6 +317,11 @@ def main(argv):
         if watch:
             args = args[1:]
         image = os.path.abspath(args[0]) if args else os.path.join(ROOT, "mygame.d64")
+        try:                                # one emulator at a time
+            Vice(timeout=1).cmd(0xBB)
+        except OSError:
+            pass
+        kill_ours()
         vice_args = ["-binarymonitor", "-binarymonitoraddress", f"ip4://{HOST}:{PORT}",
                      "-autostart", image, "+confirmonexit"] + args[1:]
         if watch:
@@ -341,12 +360,17 @@ def main(argv):
         v = Vice()
     except ConnectionRefusedError:
         if op == "stop":
-            return                      # nothing running
+            kill_ours()                 # nothing listening: clear strays
+            return
         sys.exit("VICE is not running (tools/vice.py start)")
     try:
         for op, *args in chain:
             if op == "stop":
-                v.cmd(0xBB)
+                try:
+                    v.cmd(0xBB)
+                except (OSError, ConnectionError):
+                    pass
+                kill_ours()
                 return
             run_op(v, op, args)
     finally:
