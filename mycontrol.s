@@ -239,19 +239,33 @@ control_coords:
 	shr16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x
 	add16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:#<20:#>20
 	sub16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:smooth_y:smooth_y+1
-	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
-	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
-	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
-	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
-	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
+	.for (var i = 0; i < 5; i++) {     // signed: sprites above the camera stay negative
+	lda sprite_data_2+sprite_yhi,x
+	cmp #$80
+	ror sprite_data_2+sprite_yhi,x
+	ror sprite_data_2+sprite_y,x
+	}
 	add16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:#<AG_SPRITE_DY:#>AG_SPRITE_DY
-	// sprites may not touch the cycle-exact raster code above the window:
-	// park anything above it at y=0 (top border)
+	// Sprites may not touch the cycle-exact raster code above the window.
+	// One that straddles the top edge is shown from the window's first
+	// sprite line with its top `clip` rows cut off (clip_sprites copies the
+	// visible rows); one entirely above it is parked at y=0 (top border).
+	lda #0
+	sta sprite_data_2+sprite_clip,x
 	lda sprite_data_2+sprite_yhi,x
 	bne control_coords_park
 	lda sprite_data_2+sprite_y,x
 	cmp #AG_SPRITE_YMIN
 	bcs control_coords_ok
+	eor #$ff
+	sec
+	adc #AG_SPRITE_YMIN        // clip = YMIN - y
+	cmp #21
+	bcs control_coords_park
+	sta sprite_data_2+sprite_clip,x
+	lda #AG_SPRITE_YMIN
+	sta sprite_data_2+sprite_y,x
+	rts
 control_coords_park:
 	lda #0
 	sta sprite_data_2+sprite_y,x

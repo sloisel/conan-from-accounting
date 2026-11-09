@@ -239,12 +239,61 @@ def run(v, steps=200, seed=1, verbose=True):
     return failures
 
 
+def check_top_clip(v, verbose=True):
+    """Put the player so the enemy (logical sprite 2, fixed in the world)
+    straddles the top edge by k = 1..20 rows. Each time the hardware sprite
+    must start at line 82 and show exactly rows k..20 of one of the enemy's
+    animation frames, and the whole window must pass the pixel check.
+    Returns the number of failures."""
+    a = vice.addr
+    base = a("sprite_data_2")
+    g = v.mem_get(base + 32 * 9, 128)
+    ex, ey = g[2] | g[34] << 8, g[66] | g[98] << 8      # enemy global x, y
+    sp0 = 0x2000 // 64
+    frames = [v.mem_get((sp0 + f) * 64, 63) for f in range(50, 54)]
+    ref = Ref(v)
+    fails = 0
+    for k in list(range(1, 21)) + [0, 21, 25]:
+        px, py = ex, ey + (70 + k) * 32                # enemy y reg = 81 - k
+        for off, val in ((32 * 9, px & 255), (32 * 10, px >> 8),
+                         (32 * 11, py & 255), (32 * 12, py >> 8)):
+            v.mem_set(base + off, [val])
+        settled = 0
+        for _ in range(60):                             # until any redraw is done
+            state = bottom_irq(v)
+            cam = tuple(v.mem_get(a("ag_cx"), 2))
+            settled = settled + 1 if (state[0][2:] == cam and not state[2]) else 0
+            if settled >= 3:
+                break
+        r = v.mem_get(0xD000, 0x17)
+        enabled = r[0x15] >> 2 & 1
+        y = r[5]
+        data = v.mem_get(v.mem_get(0x07FA, 1)[0] * 64, 63)
+        _, bad, band = check_frame(v, ref, state)
+        if 1 <= k <= 20:
+            vis = 63 - 3 * k
+            ok = (enabled and y == 81 and not bad and not band and data[vis:] == bytes(63 - vis)
+                  and any(data[:vis] == f[3 * k:] for f in frames))
+        elif k == 0:
+            ok = enabled and y == 81 and any(data == f for f in frames) and not bad
+        else:                                           # fully above: parked
+            ok = y == 0 and not bad and not band
+        if not ok:
+            fails += 1
+        if verbose and not ok:
+            print(f"top clip k={k}: sprite 2 y={y} enabled={enabled}, {len(bad)} wrong pixels")
+    return fails
+
+
 def main(argv):
     steps = int(argv[0]) if argv else 200
     seed = int(argv[1]) if len(argv) > 1 else 1
     v = vice.Vice()
     try:
         failures = run(v, steps, seed)
+        clip_fails = check_top_clip(v)
+        print(f"top-edge clipping: {23 - clip_fails}/23 positions OK")
+        failures += clip_fails
     finally:
         v.close()
     print(f"{steps} frames checked, {failures} bad")

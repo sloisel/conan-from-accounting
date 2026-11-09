@@ -74,6 +74,8 @@ def main():
 
         bad = game_check.run(v, 500, seed=1, verbose=False)
         check(bad == 0, f"AGSP display pixel-exact over 500 random scroll frames: {bad} bad")
+        bad = game_check.check_top_clip(v, verbose=False)
+        check(bad == 0, f"sprites slide in at the top edge (clipped 1..20 rows): {bad} bad")
         v.close()
     finally:
         subprocess.run([TOOL, "stop"], capture_output=True)

@@ -32,7 +32,9 @@
 .var sprite_dyhi=32*16
 .var sprite_yhi=32*17
 .var sprite_order=32*18
-.var sprite_total_size=32*19
+.var sprite_clip=32*19       // rows hidden above the window (myvic2.s clip_sprites)
+.var sprite_srcptr=32*20     // animation frame of a clipped sprite (debug/tests)
+.var sprite_total_size=32*21
 .var sidinit=$e000
 .var sidplay=$e003
 
@@ -86,6 +88,8 @@ sprite_data_1: .fill 5*32,0
         .align 32
 sprite_data_2: .fill sprite_order,0
 sprite_data_2_order: .fill 32,i
+sprite_data_2_clip: .fill 32,0
+sprite_data_2_srcptr: .fill 32,0
 bitset: .byte 1,2,4,8,16,32,64,128
 bitclear: .byte 255-1,255-2,255-4,255-8,255-16,255-32,255-64,255-128
 
@@ -154,12 +158,14 @@ main:
 	jsr control_player     // place the camera
 	jsr exec_controllers
 	jsr exec_animations
+	jsr clip_sprites
 	jsr ag_init            // draw the ring, start the raster IRQs
 forever:
     jsr readkb
 	jsr control_player
 	jsr exec_controllers
 	jsr exec_animations
+	jsr clip_sprites       // sprites sliding in at the top edge
 	jsr scroll_update      // draw newly exposed map edges
 	jsr ag_commit_frame    // hand position + sprites to the IRQ, wait a frame
 	jmp forever

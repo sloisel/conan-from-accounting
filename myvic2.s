@@ -27,6 +27,117 @@ initvic2:
 sprite_enable_bits:
     .fill 32, i >= 8 ? $ff : (1 << i) - 1
 
+// ---- top-edge sprite clipping ------------------------------------------
+// A sprite straddling the top of the AGSP window is displayed from the
+// window's first sprite line, using a spare sprite block that holds only its
+// visible rows. Spare blocks: $3540-$37ff (11 blocks between the sprite data
+// and the charset), used as two sets of 5 that alternate every frame, so the
+// set being displayed is never the one being written.
+.const CLIP_BLOCK0 = $3540 / 64
+.const CLIP_SET = 5
+
+.segment SPRITES
+sprites_end:
+.assert "spare clip sprite blocks are free", sprites_end <= CLIP_BLOCK0 * 64, true
+.assert "clip blocks end below the charset", (CLIP_BLOCK0 + 2 * CLIP_SET) * 64 <= charsetaddr, true
+
+.segment TABLES
+clip_base:   .byte CLIP_BLOCK0, CLIP_BLOCK0 + CLIP_SET
+clip_parity: .byte 0
+clip_next:   .byte 0
+clip_limit:  .byte 0
+clip_block:  .byte 0
+clip_n:      .byte 0
+
+.segment MAIN
+// clip_sprites: run after exec_animations (needs this frame's pointers)
+clip_sprites:
+    lda clip_parity
+    eor #1
+    sta clip_parity
+    tay
+    lda clip_base,y
+    sta clip_next
+    clc
+    adc #CLIP_SET
+    sta clip_limit
+    ldx #0
+cs_loop:
+    cpx sprite2_count
+    beq cs_done
+    lda sprite_data_2+sprite_clip,x
+    beq cs_next
+    ldy clip_next
+    cpy clip_limit
+    bcc !+
+    lda #0                  // out of spare blocks: hide this one
+    sta sprite_data_2+sprite_y,x
+    jmp cs_next
+!:  inc clip_next
+    sty clip_block
+    jsr clip_one
+cs_next:
+    inx
+    jmp cs_loop
+cs_done:
+    rts
+
+// clip_one: X = sprite, clip_block = destination block
+clip_one:
+    lda clip_block          // destination = block * 64
+    lsr
+    lsr
+    sta temp4+1
+    lda clip_block
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta temp4
+    lda sprite_data_2+sprite_pointer,x
+    sta sprite_data_2+sprite_srcptr,x
+    lsr                     // source = frame * 64 + 3 * clip
+    lsr
+    sta temp3+1
+    lda sprite_data_2+sprite_pointer,x
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta temp3
+    lda sprite_data_2+sprite_clip,x
+    sta clip_n
+    asl
+    adc clip_n              // 3 * clip (clip < 21: no carry)
+    sta clip_n
+    clc
+    adc temp3
+    sta temp3
+    bcc !+
+    inc temp3+1
+!:  lda #63
+    sec
+    sbc clip_n
+    sta clip_n              // visible bytes
+    ldy #0
+!:  lda (temp3),y
+    sta (temp4),y
+    iny
+    cpy clip_n
+    bne !-
+    lda #0
+!:  sta (temp4),y           // rows below the visible part: empty
+    iny
+    cpy #63
+    bne !-
+    lda clip_block
+    sta sprite_data_2+sprite_pointer,x
+    rts
+
 .segment MAIN
 // The raster interrupts live in myagsp.s; ag_irq_bot calls copy_sprites
 // (on commit) and do_sprite for each sprite.
