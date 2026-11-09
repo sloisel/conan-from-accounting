@@ -83,6 +83,7 @@
 #import "sprites.s"
 #import "myloader.s"
 #import "spawns.s"
+#import "hitbox.s"
 #import "myagsp.s"
 #import "mydraw.s"
 #import "mycontrol.s"

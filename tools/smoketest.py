@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vice
 import game_check
 import monster_check
+import irq_audit
 
 ROOT = vice.ROOT
 TOOL = os.path.join(ROOT, "tools", "vice.py")
@@ -39,8 +40,7 @@ def main():
         v.frames(5)
 
         n, f = sprites(v)
-        check(n == 3 and f(5, 2) == 14,
-              f"at the start: player, sword and the old wizard (monsters stream in later): {n} sprites")
+        check(n == 2, f"at the start: player and sword (monsters and the wizard stream in): {n} sprites")
         spawns = vice.addr("spawn_ty") - vice.addr("spawn_tx")
         check(spawns >= 80, f"spawn table: {spawns} monster spawn points")
         map_tile = v.mem_get(vice.addr("map") + 55 * 64 + 3, 1)[0]
@@ -92,8 +92,13 @@ def main():
         num = v.checkpoint(vice.addr("forever"))
         v.run_until_hit(num, 60)
         gm = monster_check.Game(v)
+        gm.go_near(monster_check.JELLY, 8, dx=4)        # a busy scene (7 sprites)
+        gm.frame(30)
+        bad = irq_audit.audit(v, 100, verbose=False)
+        check(not bad, f"raster IRQ chain intact in a busy scene (100 frames): {bad[:2]}")
         for name, fn in (("wizard", monster_check.wizard), ("behaviour", monster_check.behaviour),
-                         ("sword", monster_check.sword), ("contact", monster_check.contact),
+                         ("sword", monster_check.sword), ("hitbox", monster_check.hitbox),
+                         ("contact", monster_check.contact),
                          ("victory", monster_check.victory)):
             check(fn(gm), f"monsters: {name} checks")
         v.close()

@@ -15,6 +15,10 @@
 .var Ty=Sy-2*32
 .var sp0=spritebase/64
 	.segment TABLES
+cam_px_x: .word 0               // camera position in pixels (cam_update)
+cam_px_y: .word 0
+cc_t:     .byte 0
+cc_h:     .byte 0
 	//            -  S  E SE  W SW  -  S  N  - NE  E NW  W  N  -
 	//            0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
 	dir:   .byte  0, 1, 3, 2, 7, 8, 0, 1, 5, 0, 4, 3, 6, 7, 5, 0
@@ -234,27 +238,99 @@ bottomside:
 topside:
 	set16(smooth_y,0)
 topbottomok:
+	jsr cam_update
 	ldx #0
 	jsr control_coords
 	rts
 
+// cam_update: camera position in pixels (smooth >> 5), once per frame
+cam_update:
+	lda smooth_x+1
+	sta cam_px_x+1
+	lda smooth_x
+	.for (var i = 0; i < 5; i++) {
+	lsr cam_px_x+1
+	ror
+	}
+	sta cam_px_x
+	lda smooth_y+1
+	sta cam_px_y+1
+	lda smooth_y
+	.for (var i = 0; i < 5; i++) {
+	lsr cam_px_y+1
+	ror
+	}
+	sta cam_px_y
+	rts
+
+// control_coords: sprite X's screen position from its world position:
+// pixel = (global >> 5) - camera pixel + offset, the same rounding the
+// background's fine scroll uses (no jitter between sprites and map)
 control_coords:
-	sub16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:smooth_x:smooth_x+1
-	.for (var i = 0; i < 5; i++) {     // signed: sprites left of the camera stay negative
-	lda sprite_data_2+sprite_xhi,x
-	cmp #$80
-	ror sprite_data_2+sprite_xhi,x
-	ror sprite_data_2+sprite_xlo,x
-	}
-	add16 sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:sprite_data_2+sprite_xlo,x:sprite_data_2+sprite_xhi,x:#<20:#>20
-	sub16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:smooth_y:smooth_y+1
-	.for (var i = 0; i < 5; i++) {     // signed: sprites above the camera stay negative
-	lda sprite_data_2+sprite_yhi,x
-	cmp #$80
-	ror sprite_data_2+sprite_yhi,x
-	ror sprite_data_2+sprite_y,x
-	}
-	add16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:#<AG_SPRITE_DY:#>AG_SPRITE_DY
+	lda sprite_data_2+sprite_global_xhi,x      // pixel = sprite_global_xhi*8 + sprite_global_xlo/32 (11 bits)
+	lsr
+	lsr
+	lsr
+	lsr
+	lsr
+	sta cc_h
+	lda sprite_data_2+sprite_global_xlo,x
+	lsr
+	lsr
+	lsr
+	lsr
+	lsr
+	sta cc_t
+	lda sprite_data_2+sprite_global_xhi,x
+	asl
+	asl
+	asl
+	ora cc_t
+	sec                          // (no shifts between the two subtractions:
+	sbc cam_px_x                    //  they would lose the borrow)
+	sta cc_t
+	lda cc_h
+	sbc cam_px_x+1
+	tay
+	lda cc_t
+	clc
+	adc #20
+	sta sprite_data_2+sprite_xlo,x
+	tya
+	adc #0
+	sta sprite_data_2+sprite_xhi,x
+	lda sprite_data_2+sprite_global_yhi,x      // pixel = sprite_global_yhi*8 + sprite_global_ylo/32 (11 bits)
+	lsr
+	lsr
+	lsr
+	lsr
+	lsr
+	sta cc_h
+	lda sprite_data_2+sprite_global_ylo,x
+	lsr
+	lsr
+	lsr
+	lsr
+	lsr
+	sta cc_t
+	lda sprite_data_2+sprite_global_yhi,x
+	asl
+	asl
+	asl
+	ora cc_t
+	sec                          // (no shifts between the two subtractions:
+	sbc cam_px_y                    //  they would lose the borrow)
+	sta cc_t
+	lda cc_h
+	sbc cam_px_y+1
+	tay
+	lda cc_t
+	clc
+	adc #AG_SPRITE_DY
+	sta sprite_data_2+sprite_y,x
+	tya
+	adc #0
+	sta sprite_data_2+sprite_yhi,x
 	// Sprites may not touch the cycle-exact raster code above the window.
 	// One that straddles the top edge is shown from the window's first
 	// sprite line with its top `clip` rows cut off (clip_sprites copies the

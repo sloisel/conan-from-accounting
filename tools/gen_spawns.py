@@ -54,20 +54,18 @@ def main():
     def free(x, y, gap):
         return all(max(abs(x - a), abs(y - b)) >= gap for a, b, _, _ in spawns)
 
-    # the map editor's "1" markers: blobs
-    for y in range(64):
-        for x in range(64):
-            if tag[mp[y * 64 + x]] == 0x04:
-                spawns.append((x, y, BLOB, "marker"))
+    # the map editor's "1" markers: the one farthest up the start pocket is
+    # the old wizard (you run past the other markers' blobs to reach him)
+    markers = [(x, y) for y in range(64) for x in range(64) if tag[mp[y * 64 + x]] == 0x04]
+    wizard = max(markers, key=lambda p: (p[0] - START[0]) ** 2 + (p[1] - START[1]) ** 2)
+    for x, y in markers:
+        spawns.append((x, y, WIZ, "start: wizard") if (x, y) == wizard else (x, y, BLOB, "marker"))
 
-    # the old wizard just north of the start (before the first blobs), the
-    # princess in the far corner of the pond area
+    # the princess in the far corner of the pond area
     def nearest(x0, y0):
         return min(((x, y) for y in range(64) for x in range(64) if walk(x, y) and tag[mp[y * 64 + x]] != 4),
                    key=lambda p: (p[0] - x0) ** 2 + (p[1] - y0) ** 2)
-    wx, wy = nearest(START[0] + 1, START[1] - 2)   # visible on the first screen
     px, py = nearest(2, 2)
-    spawns.append((wx, wy, WIZ, "start: wizard"))
     spawns.append((px, py, PRIN, "pond"))
 
     for name, test, types, per in ZONES:

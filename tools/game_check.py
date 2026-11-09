@@ -192,10 +192,35 @@ def bottom_irq(v):
     if not v.run_until_hit(num, 10):
         raise RuntimeError("bottom IRQ not reached")
     state = frame_state(v)
+    # did the main loop finish its update (it commits, then idles)?
+    bottom_irq.main_done = v.mem_get(vice.addr("ag_commit"), 1)[0] == 1
     num = v.checkpoint(vice.addr("ab_done"))
     if not v.run_until_hit(num, 10):
         raise RuntimeError("bottom IRQ did not finish")
     return state
+
+
+def check_coords(v):
+    """Every sprite's screen position must be its world position minus the
+    camera (both in whole pixels) plus the screen offsets; y only where it
+    is fully inside the window (clipping and parking change it otherwise)."""
+    a = vice.addr
+    n = v.mem_get(a("sprite2_count"), 1)[0]
+    t = v.mem_get(a("sprite_data_2"), 32 * 27)
+    sm = v.mem_get(a("smooth_x"), 2)
+    smy = v.mem_get(a("smooth_y"), 2)
+    camx, camy = (sm[0] | sm[1] << 8) >> 5, (smy[0] | smy[1] << 8) >> 5
+    bad = []
+    for i in range(n):
+        f = lambda k: t[32 * k + i]
+        gx, gy = f(9) | f(10) << 8, f(11) | f(12) << 8
+        ex, ey = (gx >> 5) - camx + 20, (gy >> 5) - camy + 68
+        x = f(0) | f(1) << 8
+        if x != ex & 0xFFFF:
+            bad.append((i, "x", x, ex))
+        if 81 <= ey <= 230 and 0 <= ex < 344 and not f(21) & 0x40 and f(2) != ey:
+            bad.append((i, "y", f(2), ey))
+    return bad
 
 
 def run(v, steps=200, seed=1, verbose=True):
@@ -222,7 +247,15 @@ def run(v, steps=200, seed=1, verbose=True):
             y = min(max(y + vel[1], 0), 255 * 256)
         v.mem_set(gx, [x & 255]); v.mem_set(gx + 32, [x >> 8])
         v.mem_set(gx + 64, [y & 255]); v.mem_set(gx + 96, [y >> 8])
+        idle_at_poke = getattr(bottom_irq, "main_done", False)
         state = bottom_irq(v)
+        # (only when the main loop read the poked position: it was idle when
+        # the harness poked, and has finished an update since)
+        cb = check_coords(v) if idle_at_poke and bottom_irq.main_done else []
+        if cb:
+            failures += 1
+            if verbose:
+                print(f"step {step}: sprite screen positions wrong: {cb[:3]}")
         gl = {}
         (cx, cy, fine, xs), bad, band = check_frame(v, ref, state, gl)
         if not state[2] and any(sy < line <= sy + 21 for line in glitch_lines(state)

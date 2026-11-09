@@ -26,6 +26,8 @@
 .const T_PRIN = 16
 .const MAX_SPRITES = 8
 .const INTANGIBLE = $80                // sprite_state bit: no hits, no contact
+.const DYING = $40                     // sprite_state bit: playing its death
+.const DEATH_FRAMES = 28
 
 .segment TABLES
 // per type (index = type / 2)
@@ -240,6 +242,54 @@ en_moved:                       // Z = 1 if the sprite did not move
     sta sprite_data_2+sprite_dyhi,x
 }
 
+// en_blade_hits: after en_dist(monster X, sword Y=1): C = 1 if the blade's
+// pixel box overlaps the monster's (hitbox.s, per type and direction)
+en_blade_hits:
+    lda en_ax
+    cmp #100
+    bcs eb_no
+    ldy en_sx                   // signed d = monster - sword, biased by 128
+    beq !+
+    eor #$ff
+    clc
+    adc #1
+!:  eor #$80
+    sta en_t
+    lda en_ay
+    cmp #100
+    bcs eb_no
+    ldy en_sy
+    beq !+
+    eor #$ff
+    clc
+    adc #1
+!:  eor #$80
+    sta en_h
+    lda sprite_data_2+sprite_controller,x   // (controller - 4) * 4 + dir - 1
+    sec
+    sbc #T_BLOB
+    asl
+    asl
+    clc
+    adc player_dir_nz
+    tay
+    dey
+    lda en_t
+    cmp hb_xmin,y
+    bcc eb_no
+    cmp hb_xend,y
+    bcs eb_no
+    lda en_h
+    cmp hb_ymin,y
+    bcc eb_no
+    cmp hb_yend,y
+    bcs eb_no
+    sec
+    rts
+eb_no:
+    clc
+    rts
+
 // en_toward: dir (0 down, 1 right, 2 up, 3 left) from this sprite towards
 // the player along the longer axis (en_dist must have been called with Y=0)
 en_toward:
@@ -269,7 +319,9 @@ en_despawn:                     // (kept close: reached by short branches)
     jsr sprite_free
     sec
     rts
-en_ok0:
+en_pd:                          // no hits or contact: just the distance
+    ldy #0
+    jsr en_dist
     clc
     rts
 
@@ -281,6 +333,10 @@ en_common:
     jsr control_coords
     sec
     rts
+!:  lda sprite_data_2+sprite_state,x
+    and #DYING
+    beq !+
+    jmp en_dying
 !:  lda sprite_data_2+sprite_global_xhi,x   // far from the camera?
     sec
     sbc smooth_x+1
@@ -296,37 +352,35 @@ en_common:
     cmp #50
     bcs en_despawn
     lda sprite_data_2+sprite_state,x
-    bmi en_ok0                  // intangible (sunk jelly)
+    bmi en_pd                   // intangible (sunk jelly)
     lda sprite_data_2+sprite_controller,x
     cmp #T_WIZ
-    bcs en_ok0                  // wizard and princess are friendly
+    bcs en_pd                   // wizard and princess are friendly
     lda sprite_data_2+1+sprite_anim     // sword out?
     beq en_touch
     lda sprite_data_2+sprite_flash,x
     bne en_touch                // just hit: invulnerable for a moment
     ldy #1
     jsr en_dist
-    lda en_ax
-    cmp #14
-    bcs en_touch
-    lda en_ay
-    cmp #16
-    bcs en_touch
+    jsr en_blade_hits
+    bcc en_touch
     lda #16                     // hit!
     sta sprite_data_2+sprite_flash,x
     dec sprite_data_2+sprite_hp,x
     bne en_touch
-    ldy sprite_data_2+sprite_spawn,x        // killed
-    lda #2
+    ldy sprite_data_2+sprite_spawn,x        // killed: it stays dead, and
+    lda #2                                  // plays its death first
     sta spawn_state,y
-    jsr sprite_free
-    sec
-    rts
+    lda #INTANGIBLE|DYING
+    sta sprite_data_2+sprite_state,x
+    lda #DEATH_FRAMES
+    sta sprite_data_2+sprite_timer,x
+    jmp en_dying
 en_touch:
+    ldy #0                      // distance to the player: also kept for
+    jsr en_dist                 // the behaviours (en_ax, en_ay, en_sx, en_sy)
     lda player_hurt
     bne en_ok
-    ldy #0
-    jsr en_dist
     lda en_ax
     cmp #12
     bcs en_ok
@@ -354,6 +408,48 @@ en_touch:
     ldx control_index
 en_ok:
     clc
+    rts
+
+// en_dying: X = monster playing its death. Blinks white and in and out;
+// blob spins fast, skeleton and cyclops shake apart, ghost floats up,
+// jelly sinks. Returns C = 1 (the behaviour must not run).
+en_dying:
+    dec sprite_data_2+sprite_timer,x
+    bne !+
+    jsr sprite_free             // done
+    sec
+    rts
+!:  lda sprite_data_2+sprite_timer,x
+    sta sprite_data_2+sprite_flash,x       // white blink (exec_animations)
+    lda sprite_data_2+sprite_controller,x
+    cmp #T_BLOB
+    bne !+
+    lda #1                      // spin: next rotation frame every frame
+    sta sprite_data_2+sprite_delay,x
+    jmp ed_show
+!:  cmp #T_GHOST
+    bne !+
+    sub16 sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:#40:#0
+    jmp ed_show
+!:  cmp #T_JELLY
+    bne !+
+    lda #1                      // sunk disc
+    jsr sprite_anim_to
+    jmp ed_show
+!:  lda sprite_data_2+sprite_timer,x   // skeleton, cyclops: shake apart
+    and #2
+    beq !+
+    add16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#64:#0
+    jmp ed_show
+!:  sub16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#64:#0
+ed_show:
+    jsr control_coords
+    lda sprite_data_2+sprite_timer,x   // in and out
+    and #4
+    beq !+
+    lda #0
+    sta sprite_data_2+sprite_y,x
+!:  sec
     rts
 
 // ---- spawning ----------------------------------------------------------
@@ -529,8 +625,6 @@ control_skel:
     jsr en_rnd
     cmp #85
     bcs !+
-    ldy #0
-    jsr en_dist
     jsr en_toward
     jmp sk_dir
 !:  and #3
@@ -555,9 +649,7 @@ control_ghost:
     jsr en_common
     bcc !+
     rts
-!:  ldy #0
-    jsr en_dist
-    jsr en_toward
+!:  jsr en_toward                 // (en_common measured the distance)
     jsr sprite_anim_to
     lda en_ax                   // drift 12/32 px per frame on each axis
     cmp #3
@@ -590,9 +682,7 @@ control_cycl:
 !:  cmp #2
     bne !+
     jmp cy_rest
-!:  ldy #0                      // patrol; charge when lined up with the player
-    jsr en_dist
-    lda en_ax
+!:  lda en_ax                   // patrol; charge when lined up with the player
     cmp #6
     bcs !+
     lda en_ay
@@ -746,8 +836,6 @@ control_wiz:
     jsr control_coords
     lda has_sword
     bne wz_done
-    ldy #0
-    jsr en_dist
     lda en_ax
     cmp #16
     bcs wz_done
@@ -769,9 +857,7 @@ control_prin:
     jsr en_common
     bcc !+
     rts
-!:  ldy #0
-    jsr en_dist
-    lda en_ax
+!:  lda en_ax
     cmp #14
     bcs !+
     lda en_ay

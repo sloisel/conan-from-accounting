@@ -11,6 +11,7 @@ Chain commands with a lone "," to keep the CPU halted between them, e.g.
                                      background-only (no focus steal), minimized,
                                      emulator sound off, warp speed
                                      (--watch: normal window, sound, real time)
+  tools/vice.py play [image]         a window just for playing (no monitor port)
   tools/vice.py stop                 quit VICE
   tools/vice.py shot [file.png]      screenshot (visible area, 2x scaled)
   tools/vice.py peek ADDR [LEN]      hex dump; ADDR may be a label from mygame.vs
@@ -39,7 +40,9 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-HOST, PORT = "127.0.0.1", 6502
+# our own monitor port (not VICE's default 6502), so a VICE the user runs
+# never gets touched by these tools
+HOST, PORT = "127.0.0.1", 6510
 
 # C64 keyboard matrix: key -> (row selected via $dc00 bit, column bit read on $dc01)
 MATRIX = [
@@ -309,6 +312,14 @@ def main(argv):
         print(__doc__)
         return
     op, args = argv[0], argv[1:]
+    if op == "play":
+        # a window for playing: sound, real speed, *no* monitor port, so none
+        # of these tools can pause, inspect or close it
+        image = os.path.abspath(args[0]) if args else os.path.join(ROOT, "mygame.d64")
+        subprocess.Popen(["x64sc", "-autostart", image], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print("VICE (play) started")
+        return
     if op == "start":
         # default: background-only (never takes focus), minimized, emulator
         # audio output off, warp speed. `start --watch` gives a normal

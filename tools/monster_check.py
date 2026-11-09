@@ -9,7 +9,9 @@
   victory:   touching the princess shows the title picture again
              (VIC bank 2, bitmap mode)
 
-Usage: tools/monster_check.py [wizard|behaviour|sword|contact|victory|all]
+  hitbox:    the sword hits exactly where the blade's pixels overlap a monster
+
+Usage: tools/monster_check.py [wizard|behaviour|sword|hitbox|contact|victory|all]
 """
 import os
 import sys
@@ -74,7 +76,9 @@ class Game:
     def go_near(self, typ, which=0, dx=12):
         """teleport the player next to the which-th spawn point of a type and
         wait until its monster is active; returns (spawn index, sprite)"""
-        ks = [k for k in range(self.n) if self.tp[k] == typ and self.spawn_state(k) != 2]
+        prin = [(self.tx[j], self.ty[j]) for j in range(self.n) if self.tp[j] == PRIN]
+        far = lambda k: typ == PRIN or all(max(abs(self.tx[k] - x), abs(self.ty[k] - y)) > 8 for x, y in prin)
+        ks = [k for k in range(self.n) if self.tp[k] == typ and self.spawn_state(k) != 2 and far(k)]
         k = ks[which]
         cx, cy = self.tx[k] * 4 + 1, self.ty[k] * 4 + 1
         for d in (dx, -dx, dx // 2, -dx // 2, dx + 4, -dx - 4):    # stand on open ground
@@ -219,12 +223,71 @@ def sword(gm):
             gm.frame()
             frames += 1
         vice.set_keys(gm.v, [])
-        gm.frame(20)
+        dying, harmless = 0, True                      # death animation, then gone
+        for _ in range(60):
+            s = gm.find(k)
+            if s is None:
+                break
+            dying += 1
+            harmless &= s["state"] & 0xC0 == 0xC0
+            gm.frame()
         dead = gm.spawn_state(k) == 2 and gm.find(k) is None
-        r = dead and hits + 1 == HP[typ]
-        print(("ok   " if r else "FAIL ") + f"{NAMES[typ]} dies after {HP[typ]} sword hit(s): "
-              f"dead={dead} after {frames} frames")
+        r = dead and hits + 1 == HP[typ] and 20 <= dying <= 40 and harmless   # (28 updates)
+        print(("ok   " if r else "FAIL ") + f"{NAMES[typ]} dies after {HP[typ]} sword hit(s), "
+              f"death animation {dying} frames (harmless: {harmless}), then gone: {dead}")
         ok &= r
+    return ok
+
+
+def hitbox(gm):
+    """The sword hits exactly when the blade's pixel box overlaps the
+    monster: for every direction, a cyclops held at the centre of the
+    overlap is hit, one held 3 px outside it (on each side) is not."""
+    import gen_hitbox
+    spr = gen_hitbox.sprites()
+    mx0, mx1, my0, my1 = gen_hitbox.bbox(spr, range(65, 73))
+    a = vice.addr
+    sx = [0, 0, 22, 24, 22, 0, -22, -24, -22]      # sword sprite offset per direction (px)
+    sy = [0, 21, 19, 0, -19, -21, -19, 0, 19]
+    gm.v.mem_set(a("has_sword"), [1])
+    k, s = gm.go_near(CYCL, 1, dx=8)
+    ok = True
+    for d in range(1, 9):
+        bx0, bx1, by0, by1 = gen_hitbox.bbox(spr, [40 + d])
+        xr, yr = (bx0 - mx1, bx1 - mx0), (by0 - my1, by1 - my0)
+        cases = [((sum(xr) // 2, sum(yr) // 2), True),
+                 ((xr[0] - 3, sum(yr) // 2), False), ((xr[1] + 3, sum(yr) // 2), False),
+                 ((sum(xr) // 2, yr[0] - 3), False), ((sum(xr) // 2, yr[1] + 3), False)]
+        for (dx, dy), want in cases:
+            gm.v.mem_set(a("player_dir_nz"), [d])
+            hit, step_strike = False, 0
+            settled, step = 0, 0
+            while step < 80:
+                # first let a camera jump (full redraw) settle with the sword away:
+                # 3 frames in a row in which the main loop finished its update
+                strike = settled >= 3
+                if strike and step_strike >= 4:
+                    break
+                s = gm.find(k)
+                gm.v.mem_set(gm.base + 32 * F["hp"] + s["i"], [3])
+                gm.v.mem_set(gm.base + 32 * F["flash"] + s["i"], [0])
+                gm.v.mem_set(a("player_hurt"), [20])        # no knockback during the test
+                # monster - sword = (dx, dy)  ->  player = monster - (dx, dy) - sword offset
+                gm.put(0, s["x"] - (dx + sx[d]) * 32, s["y"] - (dy + sy[d]) * 32)
+                vice.set_keys(gm.v, ["J"] if strike else [])
+                gm.frame()
+                step += 1
+                settled = settled + 1 if g.bottom_irq.main_done else 0
+                s = gm.find(k)
+                if strike:
+                    step_strike += 1
+                    hit |= s["flash"] > 0
+            vice.set_keys(gm.v, [])
+            gm.frame(3)
+            if hit != want:
+                ok = False
+                print(f"FAIL dir {d} offset ({dx},{dy}): hit={hit}, expected {want}")
+    print(("ok   " if ok else "FAIL ") + "sword hits exactly where the blade overlaps (8 directions, 5 offsets each)")
     return ok
 
 
@@ -274,7 +337,7 @@ def main(argv):
         gm = Game(v)
         ok = True
         for name, fn in (("wizard", wizard), ("behaviour", behaviour), ("sword", sword),
-                         ("contact", contact), ("victory", victory)):
+                         ("hitbox", hitbox), ("contact", contact), ("victory", victory)):
             if what in (name, "all"):
                 ok &= fn(gm)
     finally:

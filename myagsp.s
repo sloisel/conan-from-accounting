@@ -89,16 +89,21 @@ ag_swidx: .byte 0
 ag_irqline: .byte 0
 n_gl:     .fill 8, 0  // raster lines on which sprites may read AG_ALT's slots
 n_gln:    .byte 0
-fr_L:     .byte 0
-fr_li:    .byte 0
 fr_n:     .byte 0
 fr_row:   .byte 0
 ag_o:     .word 0
 ag_B:     .byte 0
 ag_q8:    .byte 0
-ag_div5:  .fill 110, floor(i / 5)
+ag_div5:  .fill 128, floor(i / 5)       // (S >> 3) div 5 = S div 40
+ag_mul40: .fill 26, <(i * 40)
+crunch_tab: .fill 64, $70 | ((AG_FIRST_LINE + 1 + i) & 7)   // ytab entry before a crunched line
+fld_tab:    .fill 64, $70 | ((AG_FIRST_LINE - 1 + i) & 7)   // ... before a plain (FLD) line
+ytab_k:   .byte 0                     // crunch count ytab currently holds
+fr_y:     .byte 0
+fr_glmin: .byte 0
+fr_glmax: .byte 0
 .align $100
-ytab:     .fill 64, 0
+ytab:     .fill 64, $70 | ((AG_FIRST_LINE - 1 + i) & 7)    // = fld_tab: k = 0
 
 .segment MAIN
 
@@ -168,27 +173,22 @@ ag_nmi:
 
 // ag_prepare: compute the raster program for p_S / p_fine / p_xs.
 ag_prepare:
-    lda p_S
-    sta ag_o
-    lda p_S+1
+    lda p_S+1                // k = S div 40 = (S >> 3) div 5, m = S - 40k
     and #3
     sta ag_o+1
-    ldx #0
-pr_div:
-    lda ag_o
-    sec
-    sbc #40
+    lda p_S
+    lsr ag_o+1
+    ror
+    lsr ag_o+1
+    ror
+    lsr ag_o+1
+    ror
     tay
-    lda ag_o+1
-    sbc #0
-    bcc pr_divdone
-    sta ag_o+1
-    sty ag_o
-    inx
-    jmp pr_div
-pr_divdone:
+    ldx ag_div5,y
     stx n_k
-    lda ag_o
+    lda p_S
+    sec
+    sbc ag_mul40,x
     sta n_m
     lda #AG_T_LINE-1
     sec
@@ -197,26 +197,27 @@ pr_divdone:
     sec
     sbc #AG_FIRST_LINE
     sta n_count
-    ldx #0
-pr_y:
-    cpx n_count
+    // ytab[i] = crunch_tab[i] for i < k, fld_tab[i] otherwise: only the
+    // entries between the old and the new k change
+    cpx ytab_k
     beq pr_ydone
-    cpx n_k
-    bcs pr_fld
-    txa                     // crunch next line: YSCROLL = (n+1)&7
-    clc
-    adc #AG_FIRST_LINE+1
-    jmp pr_ystore
-pr_fld:
-    txa                     // no badline next line: YSCROLL = (n-1)&7
-    clc
-    adc #AG_FIRST_LINE-1
-pr_ystore:
-    and #7
-    ora #$70                // ECM+BMM (blank), DEN, RSEL=0
+    bcc pr_less
+    ldy ytab_k
+!:  lda crunch_tab,y
+    sta ytab,y
+    iny
+    cpy n_k
+    bne !-
+    beq pr_ykeep
+pr_less:
+!:  lda fld_tab,x
     sta ytab,x
     inx
-    jmp pr_y
+    cpx ytab_k
+    bne !-
+pr_ykeep:
+    lda n_k
+    sta ytab_k
 pr_ydone:
     lda n_V                 // n_vsp: badline value at the VSP cycle; for
     ldx n_m                 // m = 0 the unchanged value (same timing)
@@ -342,88 +343,114 @@ gl_add:
 gl_none:
     rts
 
-// ag_fix_rows: for every line in n_gl and every hardware sprite n shown on
-// it, copy that sprite row from its real frame into block AG_PTRCODE+n.
-// Runs in the bottom IRQ after the sprite registers for the next frame are
-// set (self-modifying code: no zero page shared with the main loop).
+// ag_fix_rows: for every hardware sprite shown on a line in n_gl, copy
+// that sprite row from its real frame into block AG_PTRCODE+n. Runs in the
+// bottom IRQ after the sprite registers for the next frame are set
+// (self-modifying code: no zero page shared with the main loop).
 ag_fix_rows:
-    ldx #0
-fr_line:
-    cpx n_gln
+    lda n_gln
     bne !+
     rts
-!:  stx fr_li
-    lda n_gl,x
-    sta fr_L
-    ldy #0
+!:  lda n_gl                // lines are in increasing order
+    sta fr_glmin
+    ldx n_gln
+    lda n_gl-1,x
+    sta fr_glmax
+    ldx #7
+    jmp fr_spr
+fr_skip:
+    jmp fr_next             // (trampoline for the short branches below)
 fr_spr:
-    sty fr_n
     lda $d015
-    and bitset,y
-    beq fr_next
-    tya
-    asl
-    tax
-    lda fr_L
-    clc
-    sbc $d001,x             // row = L - y - 1
-    bcc fr_next
-    cmp #21
-    bcs fr_next
-    sta fr_row
-    asl
-    adc fr_row              // 3 * row
-    sta fr_row
-    lda AG_SCREEN+$3f8,y    // source: the sprite's real frame
-    lsr
-    lsr
-    sta fr_src+2
-    lda AG_SCREEN+$3f8,y
-    asl
-    asl
-    asl
-    asl
-    asl
-    asl
-    clc
-    adc fr_row
-    sta fr_src+1
-    bcc !+
-    inc fr_src+2
-!:  tya                     // destination: block AG_PTRCODE+n
-    clc
-    adc #AG_PTRCODE
-    tax
-    lsr
-    lsr
-    sta fr_dst+2
+    and bitset,x
+    beq fr_skip
     txa
     asl
-    asl
-    asl
-    asl
-    asl
-    asl
-    clc
-    adc fr_row
-    sta fr_dst+1
+    tay
+    lda $d001,y
+    sta fr_y
+    lda fr_glmax            // shown lines y+1..y+21 vs [glmin, glmax]
+    sec
+    sbc fr_y
+    bcc fr_skip
+    beq fr_skip
+    lda fr_glmin
+    sec
+    sbc fr_y
     bcc !+
-    inc fr_dst+2
-!:  ldx #2
-fr_src:
-    lda $ffff,x
-fr_dst:
-    sta $ffff,x
-    dex
-    bpl fr_src
-fr_next:
-    ldy fr_n
+    cmp #22
+    bcs fr_skip
+!:  lda AG_SCREEN+$3f8,x    // source: the sprite's real frame (pointer * 64)
+    lsr
+    lsr
+    sta fr_s0+2
+    sta fr_s1+2
+    sta fr_s2+2
+    lda AG_SCREEN+$3f8,x
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta fr_s0+1
+    sta fr_s1+1
+    sta fr_s2+1
+    txa                     // destination: block AG_PTRCODE+n
+    clc
+    adc #AG_PTRCODE
+    pha
+    lsr
+    lsr
+    sta fr_d0+2
+    sta fr_d1+2
+    sta fr_d2+2
+    pla
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta fr_d0+1
+    sta fr_d1+1
+    sta fr_d2+1
+    stx fr_n
+    ldx n_gln
+fr_line:
+    lda n_gl-1,x
+    clc
+    sbc fr_y                // row = L - y - 1
+    bcc fr_lnext
+    cmp #21
+    bcs fr_lnext
+    sta fr_row
+    asl
+    adc fr_row
+    tay                     // 3 * row
+fr_s0:
+    lda $ffff,y
+fr_d0:
+    sta $ffff,y
     iny
-    cpy #8
-    bne fr_spr
-    ldx fr_li
-    inx
-    jmp fr_line
+fr_s1:
+    lda $ffff,y
+fr_d1:
+    sta $ffff,y
+    iny
+fr_s2:
+    lda $ffff,y
+fr_d2:
+    sta $ffff,y
+fr_lnext:
+    dex
+    bne fr_line
+    ldx fr_n
+fr_next:
+    dex
+    bmi !+
+    jmp fr_spr
+!:  rts
 
 // ag_sw_row: note the row showing visible offset ag_o (if visible)
 ag_sw_row:
@@ -606,6 +633,17 @@ ag_bot_body:
     sta ag_frame
 !:  jsr ag_prepare
     inc ag_vbl
+    // The next frame's top IRQ is scheduled now and interrupts may nest from
+    // here on: the rest (sprites, pointer rows, music) can never make the top
+    // IRQ late, even in an unusually heavy frame.
+    lda #<ag_irq_pre
+    sta $fffe
+    lda #>ag_irq_pre
+    sta $ffff
+    lda #AG_LINE_PRE
+    sta $d012
+    asl $d019               // ack our own raster flag before cli
+    cli
     lda #0
     sta sprite_logical_iterator
     sta sprite_hw_iterator
@@ -621,13 +659,7 @@ ab_done:
     sta $d015
     jsr ag_fix_rows
     jsr sidplay
-    lda #<ag_irq_pre
-    sta $fffe
-    lda #>ag_irq_pre
-    sta $ffff
-    lda #AG_LINE_PRE
-    sta $d012
-    asl $d019
+ab_end:                     // (tools/irq_audit.py: bottom work done)
     pla
     tay
     pla
