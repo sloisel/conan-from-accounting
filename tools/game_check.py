@@ -53,34 +53,29 @@ def frame(v):
     return lambda line, x: pix[(yo + line - 52) * dw + xo + x - 24]
 
 
-def _unused_sprite_mask(v):
-    r = v.mem_get(0xD000, 0x17)
-    boxes = []
-    for i in range(8):
-        if r[0x15] >> i & 1:
-            x = r[2 * i] | ((r[0x10] >> i & 1) << 8)
-            y = r[2 * i + 1]
-            boxes.append((x, x + 24, y + 1, y + 22))
-    return lambda line, x: any(x0 <= x < x1 and y0 <= line < y1 for x0, x1, y0, y1 in boxes)
-
-
 class Sprites:
-    """the hardware sprites of the frame being displayed (multicolour)"""
+    """the sprites of the frame being displayed, from the multiplexer's
+    front plan (mymux.s): each entry = one sprite on one hardware sprite"""
 
     def __init__(self, v):
-        r = v.mem_get(0xD000, 0x2F)
-        ptr = v.mem_get(0x07F8, 8)              # pointers in AG_SCREEN
+        a = vice.addr
+        front = v.mem_get(a("mx_front"), 1)[0]
+        n = v.mem_get(a("mx_n") + front, 1)[0]
+        base = front * 16
+        get = lambda name: v.mem_get(a(name) + base, max(n, 1))
+        slot, y, xlo, msb, col, ptr, lidx = (get(k) for k in
+            ("mx_slot", "mx_y", "mx_xlo", "mx_msb", "mx_col", "mx_ptr", "mx_lidx"))
         self.spr = []
-        for n in range(8):
-            if r[0x15] >> n & 1:
-                x = r[2 * n] | ((r[0x10] >> n & 1) << 8)
-                self.spr.append((n, x, r[2 * n + 1], r[0x27 + n] & 15,
-                                 v.mem_get(ptr[n] * 64, 63)))
-        self.mc = (r[0x25] & 15, r[0x26] & 15)
+        for e in range(n):
+            self.spr.append((slot[e], xlo[e] | (1 if msb[e] else 0) << 8, y[e], col[e] & 15,
+                             v.mem_get(ptr[e] * 64, 63), lidx[e], ptr[e]))
+        self.spr.sort(key=lambda s: s[0])            # hardware sprite 0 in front
+        r = v.mem_get(0xD025, 2)
+        self.mc = (r[0] & 15, r[1] & 15)
 
     def pixel(self, line, x):
-        """(colour, sprite number) of the topmost sprite pixel, or None"""
-        for n, sx, sy, col, data in self.spr:  # sprite 0 has priority
+        """(colour, hardware sprite) of the topmost sprite pixel, or None"""
+        for n, sx, sy, col, data, _, _ in self.spr:
             if sx <= x < sx + 24 and sy < line <= sy + 21:
                 b = data[(line - sy - 1) * 3 + (x - sx) // 8]
                 bits = b >> (6 - ((x - sx) & 6)) & 3
@@ -89,7 +84,13 @@ class Sprites:
         return None
 
     def covers(self, line, x):
-        return any(sx <= x < sx + 24 and sy < line <= sy + 21 for _, sx, sy, _, _ in self.spr)
+        return any(sx <= x < sx + 24 and sy < line <= sy + 21 for _, sx, sy, *_ in self.spr)
+
+    def entry(self, lidx):
+        for e in self.spr:
+            if e[5] == lidx:
+                return e
+        return None
 
 
 def frame_state(v):
@@ -143,7 +144,7 @@ def check_frame(v, ref, state, glitches=None):
             got = px(line, x)
             if got != want:
                 if any(n in ok_spr and sx <= x < sx + 24 and sy < line <= sy + 21
-                       for n, sx, sy, _, _ in spr.spr):
+                       for n, sx, sy, *_ in spr.spr):
                     if glitches is not None:
                         glitches[line] = glitches.get(line, 0) + 1
                     continue
@@ -216,9 +217,13 @@ def check_coords(v):
         gx, gy = f(9) | f(10) << 8, f(11) | f(12) << 8
         ex, ey = (gx >> 5) - camx + 20, (gy >> 5) - camy + 68
         x = f(0) | f(1) << 8
+        if f(2) == 0:
+            continue                       # parked: not displayed (frozen, idle sword)
         if x != ex & 0xFFFF:
             bad.append((i, "x", x, ex))
-        if 81 <= ey <= 230 and 0 <= ex < 344 and not f(21) & 0x40 and f(2) != ey:
+        parked_sword = i == 1 and f(6) == 0 and f(2) == 0    # idle sword: no sprite
+        if 81 <= ey <= 230 and 0 <= ex < 344 and not f(21) & 0x40 and f(2) != ey \
+                and not parked_sword:
             bad.append((i, "y", f(2), ey))
     return bad
 
@@ -259,7 +264,7 @@ def run(v, steps=200, seed=1, verbose=True):
         gl = {}
         (cx, cy, fine, xs), bad, band = check_frame(v, ref, state, gl)
         if not state[2] and any(sy < line <= sy + 21 for line in glitch_lines(state)
-                                for _, _, sy, _, _ in state[1].spr):
+                                for _, _, sy, *_ in state[1].spr):
             crossing += 1
         if gl:                       # sprites must be right on switched lines too
             glitch_frames += 1
@@ -274,10 +279,17 @@ def run(v, steps=200, seed=1, verbose=True):
                       + (f"; first {bad[0]}" if bad else "")
                       + f"; lines {sorted(set(b[0] for b in bad))[:12]}"
                       + f"; d018top/aft/B1/B2 {list(state[3])}"
-                      + f"; sprites {[(n, x, y) for n, x, y, _, _ in state[1].spr]}")
+                      + f"; sprites {[(n, x, y) for n, x, y, *_ in state[1].spr]}")
                 rd = ring_diff(v, ref, cx, cy)
                 print(f"   ring vs map: {len(rd)} wrong slots {rd[:6]}; "
                       f"ag_cx/cy={tuple(v.mem_get(a('ag_cx'), 2))}")
+                fr = v.mem_get(a("mx_front"), 1)[0]
+                print(f"   plan: front {fr} back {v.mem_get(a('mx_back'), 1)[0]} "
+                      f"n {list(v.mem_get(a('mx_n'), 2))} "
+                      f"y {list(v.mem_get(a('mx_y') + fr * 16, 8))} "
+                      f"line {list(v.mem_get(a('mx_line') + fr * 16, 8))} "
+                      f"slot {list(v.mem_get(a('mx_slot') + fr * 16, 8))} "
+                      f"state-n {len(state[1].spr)}")
             if failures == 1:
                 vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "game_check_fail.png"))
             if failures > 5:
@@ -330,10 +342,10 @@ def check_top_clip(v, verbose=True):
             settled = settled + 1 if (state[0][2:] == cam and not state[2]) else 0
             if settled >= 3:
                 break
-        r = v.mem_get(0xD000, 0x17)
-        enabled = r[0x15] >> 2 & 1
-        y = r[5]
-        data = v.mem_get(v.mem_get(0x07FA, 1)[0] * 64, 63)
+        e = state[1].entry(2)                       # the test monster's plan entry
+        enabled = e is not None
+        y = e[2] if e else 0
+        data = e[4] if e else bytes(63)
         _, bad, band = check_frame(v, ref, state)
         if 1 <= k <= 20:
             vis = 63 - 3 * k
@@ -382,7 +394,7 @@ def check_edges(v, verbose=True, frames=7 * 130):
             gl = {}
             _, bad, band = check_frame(v, ref, state, gl)
             if any(sy < l <= sy + 21 and (l <= 90 or l >= 238) for l in glitch_lines(state)
-                   for _, _, sy, _, _ in state[1].spr):
+                   for _, _, sy, *_ in state[1].spr):
                 edge += 1
             if bad or band or gl:
                 bad_frames += 1

@@ -104,35 +104,26 @@ indices: .word player_index, sword_index, blob_index, skel_index, ghost_index, c
 // or
 //    beq can_move
 control_path_test:
-	lda #0    // initialize path array index (low byte)
+	ldy temp2+1              // row of the 128x128 bit grid (2x2 chars per bit)
+	lda path_row_lo,y
 	sta temp3
-	ldy temp2+1 // find array offset due to y coordinate in temp2
-	iny
-	tya
-	lsr
-	.for(var i=0;i<4;i++) {
-		lsr
-		ror temp3
-	}
+	lda path_row_hi,y
 	sta temp3+1
-	ldy temp+1 // find array offset due to x coordinate in temp
-	iny
-	tya
-	lsr
+	ldy temp+1
+	lda path_bit,y
 	sta temp4
-	lsr
-	lsr
-	lsr
-	ora temp3
-	sta temp3 // now temp3 contains the array offset
-	add16 temp3:temp3+1:#<pathing:#>pathing:temp3:temp3+1 // add offset to array base
-	lda temp4 // find which bit is relevant
-	and #7
+	lda path_byte,y
 	tay
-	lda bitset,y
-	ldy #0 // check to see if the corresponding bit is set
+	lda temp4
 	and (temp3),y
 	rts
+// (char coordinate c -> half-tile (c+1)/2, wrapping like the 8-bit index)
+path_row_lo: .fill 256, <(pathing + (((i+1)&255)>>1)*16)
+path_row_hi: .fill 256, >(pathing + (((i+1)&255)>>1)*16)
+path_byte:   .fill 256, (((i+1)&255)>>1)>>3
+path_bit:    .fill 256, 1 << ((((i+1)&255)>>1)&7)
+cc_shr5:     .fill 256, i >> 5
+cc_shl3:     .fill 256, (i << 3) & 255
 
 // control_move: try to move a sprite.
 // Arguments:
@@ -267,68 +258,46 @@ cam_update:
 // pixel = (global >> 5) - camera pixel + offset, the same rounding the
 // background's fine scroll uses (no jitter between sprites and map)
 control_coords:
-	lda sprite_data_2+sprite_global_xhi,x      // pixel = sprite_global_xhi*8 + sprite_global_xlo/32 (11 bits)
-	lsr
-	lsr
-	lsr
-	lsr
-	lsr
+	ldy sprite_data_2+sprite_global_xhi,x      // pixel = global / 32 (11 bits)
+	lda cc_shr5,y
+	sta sprite_data_2+sprite_px_hi,x
 	sta cc_h
-	lda sprite_data_2+sprite_global_xlo,x
-	lsr
-	lsr
-	lsr
-	lsr
-	lsr
-	sta cc_t
-	lda sprite_data_2+sprite_global_xhi,x
-	asl
-	asl
-	asl
-	ora cc_t
-	sec                          // (no shifts between the two subtractions:
-	sbc cam_px_x                    //  they would lose the borrow)
-	sta cc_t
+	lda cc_shl3,y
+	ldy sprite_data_2+sprite_global_xlo,x
+	ora cc_shr5,y
+	sta sprite_data_2+sprite_px_lo,x
+	sec                                        // screen x = pixel - camera + 20
+	sbc cam_px_x
+	tay
 	lda cc_h
 	sbc cam_px_x+1
-	tay
-	lda cc_t
+	sta cc_h
+	tya
 	clc
 	adc #20
 	sta sprite_data_2+sprite_xlo,x
-	tya
+	lda cc_h
 	adc #0
 	sta sprite_data_2+sprite_xhi,x
-	lda sprite_data_2+sprite_global_yhi,x      // pixel = sprite_global_yhi*8 + sprite_global_ylo/32 (11 bits)
-	lsr
-	lsr
-	lsr
-	lsr
-	lsr
+	ldy sprite_data_2+sprite_global_yhi,x
+	lda cc_shr5,y
+	sta sprite_data_2+sprite_py_hi,x
 	sta cc_h
-	lda sprite_data_2+sprite_global_ylo,x
-	lsr
-	lsr
-	lsr
-	lsr
-	lsr
-	sta cc_t
-	lda sprite_data_2+sprite_global_yhi,x
-	asl
-	asl
-	asl
-	ora cc_t
-	sec                          // (no shifts between the two subtractions:
-	sbc cam_px_y                    //  they would lose the borrow)
-	sta cc_t
+	lda cc_shl3,y
+	ldy sprite_data_2+sprite_global_ylo,x
+	ora cc_shr5,y
+	sta sprite_data_2+sprite_py_lo,x
+	sec
+	sbc cam_px_y
+	tay
 	lda cc_h
 	sbc cam_px_y+1
-	tay
-	lda cc_t
+	sta cc_h
+	tya
 	clc
 	adc #AG_SPRITE_DY
 	sta sprite_data_2+sprite_y,x
-	tya
+	lda cc_h
 	adc #0
 	sta sprite_data_2+sprite_yhi,x
 	// Sprites may not touch the cycle-exact raster code above the window.
@@ -388,7 +357,10 @@ control_sword_stab:
 	sta sprite_data_2+1+sprite_frame
 	ldx #1
 	jsr control_coords
-	rts
+	lda sprite_data_2+1+sprite_anim    // sword not out: no hardware sprite
+	bne !+
+	sta sprite_data_2+1+sprite_y
+!:	rts
 
 control_nop:
 	rts
@@ -511,21 +483,29 @@ sprite_init_load_anim:
     rts
 
 exec_controllers:
+	inc en_phase             // monsters think every other frame (myenemies.s)
 	ldx #0
 	stx control_index
 exec_controllers_loop:
 	cpx sprite2_count
 	bcs exec_controllers_end               // (>=: a controller may free sprites)
+	jsr en_offframe
+	bcs exec_controllers_next              // its other frame: move completed
 	ldy sprite_data_2+sprite_controller,x
 	lda controllers,y
 	sta exec_controllers_jsr+1
 //	iny
 	lda controllers+1,y
 	sta exec_controllers_jsr+2
+	lda #0
+	sta sf_moved
 exec_controllers_jsr:
 	jsr $1234
+	lda sf_moved             // freed: the last sprite moved into this slot,
+	bne !+                   // so run this slot again
+exec_controllers_next:
 	inc control_index
-	ldx control_index
+!:	ldx control_index
 	jmp exec_controllers_loop
 exec_controllers_end:
 	rts

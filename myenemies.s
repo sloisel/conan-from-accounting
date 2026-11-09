@@ -2,11 +2,12 @@
 //
 // Spawn points come from spawns.s (tools/gen_spawns.py, by biome and route
 // progression). spawn_update activates a spawn point when it comes near the
-// screen and there is a free sprite; en_common despawns a monster that
-// wandered far off screen (its spawn point becomes idle again) and handles
-// sword hits and touching the player. A killed monster's spawn point stays
-// dead. Without a sprite multiplexer at most 8 sprites exist: player, sword
-// and up to 6 monsters.
+// screen (in a ring just outside it, never in view, except right after a
+// full redraw) and there is a free sprite. Monsters stay alive well beyond
+// the screen ("object permanence"): more than a few chars off screen they are
+// frozen (no AI, no hardware sprite); far away they despawn and their spawn
+// point becomes idle again. en_common also handles sword hits and touching
+// the player. A killed monster's spawn point stays dead.
 //
 // Types (= controller numbers, see mycontrol.s):
 //   blob      rolls left/right, rotating the way it rolls; turns at walls
@@ -24,7 +25,7 @@
 .const T_JELLY = 12
 .const T_WIZ = 14
 .const T_PRIN = 16
-.const MAX_SPRITES = 8
+.const MAX_SPRITES = 16                // player, sword and up to 14 monsters alive
 .const INTANGIBLE = $80                // sprite_state bit: no hits, no contact
 .const DYING = $40                     // sprite_state bit: playing its death
 .const DEATH_FRAMES = 28
@@ -38,6 +39,8 @@ player_hurt:   .byte 0                 // frames of knockback/invulnerability le
 knock_dx:      .word 0
 knock_dy:      .word 0
 spawn_rr:      .byte 0
+sf_moved:      .byte 0
+spawn_grace:   .byte 0                 // frames in which spawning in view is fine
 en_t:          .byte 0
 en_h:          .byte 0
 en_sgn:        .byte 0
@@ -50,10 +53,15 @@ en_ox:         .word 0
 en_oy:         .word 0
 sat_n:         .byte 0
 sp_i:          .byte 0
+en_phase:      .byte 0                 // flips every frame (en_offframe)
+// Monsters think (and move) every EN_THINK frames, half of them on each
+// frame; the frame in between only completes the move (en_offframe). So
+// speeds are per think (EN_THINK frames) and timers count thinks.
+.const EN_THINK = 2
 // 4 directions: 0 down, 1 right, 2 up, 3 left (velocity tables in 1/32 px)
-.var skelv = 20
-.var cyclv = 16
-.var chargev = 72
+.var skelv = 20*EN_THINK
+.var cyclv = 16*EN_THINK
+.var chargev = 72*EN_THINK
 dir4_dx_skel:  .word 0, skelv, 0, -skelv
 dir4_dy_skel:  .word skelv, 0, -skelv, 0
 dir4_dx_cycl:  .word 0, cyclv, 0, -cyclv
@@ -134,7 +142,10 @@ sat_ld:
 !:  rts
 
 // sprite_free: X = sprite (>= 2); the last sprite moves into its slot
+// (sf_moved tells exec_controllers to run that slot again this frame)
 sprite_free:
+    lda #1
+    sta sf_moved
     ldy sprite2_count
     dey
     .for (var f = 0; f < sprite_nfields; f++) {
@@ -144,65 +155,84 @@ sprite_free:
     dec sprite2_count
     rts
 
-// en_abs_px: A:en_t = signed difference in 1/32 px. Returns A = |d| in
-// pixels (255 if 255 or more), en_sgn = 1 if d < 0. Keeps X and Y.
-en_abs_px:
-    sta en_h
-    lda #0
-    sta en_sgn
-    lda en_h
-    bpl !+
-    inc en_sgn
-    lda en_t
-    eor #$ff
-    clc
-    adc #1
-    sta en_t
-    lda en_h
-    eor #$ff
-    adc #0
-    sta en_h
-!:  lda en_h
-    cmp #$20
+en_relx:
+    sec
+    sbc smooth_x+1
+    jmp en_rel
+en_rely:
+    sec
+    sbc smooth_y+1
+en_rel:
+    bcs er_pos
+    clc                         // negative: A = 256 + rel
+    adc #64
     bcs !+
-    lda en_t
-    lsr
-    lsr
-    lsr
-    lsr
-    lsr
-    sta en_t
-    lda en_h
-    asl
-    asl
-    asl
-    ora en_t
+    lda #0
+!:  rts
+er_pos:
+    cmp #192
+    bcc !+
+    lda #255
     rts
-!:  lda #255
+!:  adc #64
     rts
 
-// en_dist: X = this sprite, Y = other -> en_ax, en_ay (pixels), en_sx, en_sy
+// en_dist: X = this sprite, Y = other -> en_ax, en_ay (pixels, 255 = far),
+// en_sx, en_sy (1: this one is left of / above the other). From the pixel
+// positions of their last control_coords: for this sprite, last frame's (it
+// has not moved since); the player and sword have already moved this frame.
 en_dist:
     sec
-    lda sprite_data_2+sprite_global_xlo,x
-    sbc sprite_data_2+sprite_global_xlo,y
+    lda sprite_data_2+sprite_px_lo,x
+    sbc sprite_data_2+sprite_px_lo,y
     sta en_t
-    lda sprite_data_2+sprite_global_xhi,x
-    sbc sprite_data_2+sprite_global_xhi,y
-    jsr en_abs_px
+    lda sprite_data_2+sprite_px_hi,x
+    sbc sprite_data_2+sprite_px_hi,y
+    jsr en_abs8
     sta en_ax
     lda en_sgn
     sta en_sx
     sec
-    lda sprite_data_2+sprite_global_ylo,x
-    sbc sprite_data_2+sprite_global_ylo,y
+    lda sprite_data_2+sprite_py_lo,x
+    sbc sprite_data_2+sprite_py_lo,y
     sta en_t
-    lda sprite_data_2+sprite_global_yhi,x
-    sbc sprite_data_2+sprite_global_yhi,y
-    jsr en_abs_px
+    lda sprite_data_2+sprite_py_hi,x
+    sbc sprite_data_2+sprite_py_hi,y
+    jsr en_abs8
     sta en_ay
     lda en_sgn
     sta en_sy
+    rts
+
+// en_abs8: A:en_t = signed difference in pixels -> A = |d| (255 if more),
+// en_sgn = 1 if negative. Keeps X, Y.
+en_abs8:
+    bmi ea_neg
+    bne ea_far
+    sta en_sgn
+    lda en_t
+    rts
+ea_far:
+    lda #0
+    sta en_sgn
+    lda #255
+    rts
+ea_neg:
+    cmp #$ff
+    bne ea_farn
+    lda #1
+    sta en_sgn
+    lda en_t
+    beq ea_256
+    eor #$ff
+    clc
+    adc #1
+    rts
+ea_farn:
+    lda #1
+    sta en_sgn
+ea_256:
+    lda #255
     rts
 
 // en_save_pos / en_moved: did control_move change the position?
@@ -319,6 +349,12 @@ en_despawn:                     // (kept close: reached by short branches)
     jsr sprite_free
     sec
     rts
+en_frozen:                      // off screen: stays put, not drawn
+    lda #0
+    sta sprite_data_2+sprite_y,x
+    sta sprite_data_2+sprite_clip,x
+    sec
+    rts
 en_pd:                          // no hits or contact: just the distance
     ldy #0
     jsr en_dist
@@ -337,20 +373,28 @@ en_common:
     and #DYING
     beq !+
     jmp en_dying
-!:  lda sprite_data_2+sprite_global_xhi,x   // far from the camera?
-    sec
-    sbc smooth_x+1
-    clc
-    adc #14
-    cmp #68
+!:  lda sprite_data_2+sprite_global_xhi,x   // far from the camera: despawn
+    jsr en_relx
+    cmp #64-28
+    bcc en_despawn
+    cmp #64+68
     bcs en_despawn
+    sta en_tmp
     lda sprite_data_2+sprite_global_yhi,x
-    sec
-    sbc smooth_y+1
-    clc
-    adc #14
-    cmp #50
+    jsr en_rely
+    cmp #64-20
+    bcc en_despawn
+    cmp #64+42
     bcs en_despawn
+    cmp #64-7                   // more than a few chars off screen: frozen
+    bcc en_frozen
+    cmp #64+26
+    bcs en_frozen
+    lda en_tmp
+    cmp #64-7
+    bcc en_frozen
+    cmp #64+44
+    bcs en_frozen
     lda sprite_data_2+sprite_state,x
     bmi en_pd                   // intangible (sunk jelly)
     lda sprite_data_2+sprite_controller,x
@@ -455,10 +499,14 @@ ed_show:
 // ---- spawning ----------------------------------------------------------
 // spawn_update: look at a few spawn points per frame; activate those near
 // the screen when there is a free sprite
+// (SPAWN_PER_FRAME points per frame; SPAWN_GRACE: see spawns.s)
 spawn_update:
     lda debug_freeze_enemies
     bne su_end
-    lda #8
+    lda spawn_grace
+    beq !+
+    dec spawn_grace
+!:  lda #SPAWN_PER_FRAME
     sta sp_i
 su_next:
     ldx spawn_rr
@@ -469,24 +517,31 @@ su_next:
 !:  stx spawn_rr
     lda spawn_state,x
     bne su_skip
-    lda spawn_tx,x              // tile centre (chars) relative to the camera
-    asl
-    asl
-    sec
-    sbc smooth_x+1
-    clc
-    adc #2+6
-    cmp #40+12
+    lda spawn_cx,x              // tile centre (chars) relative to the camera
+    jsr en_relx
+    cmp #64-12                  // activation zone: up to ~12 chars off screen
+    bcc su_skip
+    cmp #64+52
     bcs su_skip
-    lda spawn_ty,x
-    asl
-    asl
-    sec
-    sbc smooth_y+1
-    clc
-    adc #2+6
-    cmp #22+12
+    sta en_tmp
+    lda spawn_cy,x
+    jsr en_rely
+    cmp #64-10
+    bcc su_skip
+    cmp #64+32
     bcs su_skip
+    ldy spawn_grace             // never pop up in view (except after a redraw)
+    bne su_ok
+    cmp #64-5
+    bcc su_ok
+    cmp #64+24
+    bcs su_ok
+    lda en_tmp
+    cmp #64-5
+    bcc su_ok
+    cmp #64+42
+    bcc su_skip
+su_ok:
     lda sprite2_count
     cmp #MAX_SPRITES
     bcs su_end
@@ -538,9 +593,9 @@ en_spawn:
     and #3
     sta sprite_data_2+sprite_dir,x
     jsr en_rnd
-    and #31
+    and #15
     clc
-    adc #20
+    adc #20/EN_THINK
     sta sprite_data_2+sprite_timer,x
     lda #0
     jsr sprite_init
@@ -579,7 +634,109 @@ mc_next:
     bne mc_page
     rts
 
-// ---- behaviours (X = sprite on entry; must end with control_coords) -----
+// ---- thinking every other frame ------------------------------------------
+// en_offframe: X = sprite, before its controller runs. A monster thinks on
+// every EN_THINK-th frame (by sprite index, so half of them per frame); on
+// its other frame it only completes the move of its last think (C = 1: the
+// controller must not run). Dying monsters keep every frame (the death
+// animation counts frames), as do frozen ones in tests.
+en_offframe:
+    lda sprite_data_2+sprite_controller,x
+    cmp #T_BLOB
+    bcc eo_think                // player, sword
+    lda sprite_data_2+sprite_state,x
+    and #DYING
+    bne eo_think
+    lda debug_freeze_enemies
+    bne eo_think
+    txa
+    eor en_phase
+    lsr
+    bcc eo_save                 // its think
+    clc                         // the other half of the move (en_finish),
+    lda sprite_data_2+sprite_global_xlo,x   // checked by that think
+    adc sprite_data_2+sprite_dxlo,x
+    sta sprite_data_2+sprite_global_xlo,x
+    lda sprite_data_2+sprite_global_xhi,x
+    adc sprite_data_2+sprite_dxhi,x
+    sta sprite_data_2+sprite_global_xhi,x
+    clc
+    lda sprite_data_2+sprite_global_ylo,x
+    adc sprite_data_2+sprite_dylo,x
+    sta sprite_data_2+sprite_global_ylo,x
+    lda sprite_data_2+sprite_global_yhi,x
+    adc sprite_data_2+sprite_dyhi,x
+    sta sprite_data_2+sprite_global_yhi,x
+    lda #0                      // (only once, should it come twice in a row)
+    sta sprite_data_2+sprite_dxlo,x
+    sta sprite_data_2+sprite_dxhi,x
+    sta sprite_data_2+sprite_dylo,x
+    sta sprite_data_2+sprite_dyhi,x
+    jsr control_coords
+    sec
+    rts
+eo_save:
+    jsr en_save_pos             // (en_finish: where the think started)
+eo_think:
+    clc
+    rts
+
+// en_finish: end of a think: the monster moved from en_ox/en_oy to its new
+// position (collision checked for the whole move). Show it halfway now and
+// keep the other half (in dx/dy, no longer needed as a velocity) for the
+// next frame, so the motion stays smooth. Jumps (a jelly resurfacing) are
+// not split. Ends with control_coords.
+en_finish:
+    sec
+    lda sprite_data_2+sprite_global_xlo,x
+    sbc en_ox
+    sta en_t
+    lda sprite_data_2+sprite_global_xhi,x
+    sbc en_ox+1
+    jsr ef_half
+    sta sprite_data_2+sprite_dxhi,x
+    lda en_t
+    sta sprite_data_2+sprite_dxlo,x
+    sec
+    lda sprite_data_2+sprite_global_xlo,x
+    sbc sprite_data_2+sprite_dxlo,x
+    sta sprite_data_2+sprite_global_xlo,x
+    lda sprite_data_2+sprite_global_xhi,x
+    sbc sprite_data_2+sprite_dxhi,x
+    sta sprite_data_2+sprite_global_xhi,x
+    sec
+    lda sprite_data_2+sprite_global_ylo,x
+    sbc en_oy
+    sta en_t
+    lda sprite_data_2+sprite_global_yhi,x
+    sbc en_oy+1
+    jsr ef_half
+    sta sprite_data_2+sprite_dyhi,x
+    lda en_t
+    sta sprite_data_2+sprite_dylo,x
+    sec
+    lda sprite_data_2+sprite_global_ylo,x
+    sbc sprite_data_2+sprite_dylo,x
+    sta sprite_data_2+sprite_global_ylo,x
+    lda sprite_data_2+sprite_global_yhi,x
+    sbc sprite_data_2+sprite_dyhi,x
+    sta sprite_data_2+sprite_global_yhi,x
+    jmp control_coords
+// ef_half: A:en_t = signed move -> A:en_t = half of it (0 for a jump of a
+// char or more)
+ef_half:
+    beq !+
+    cmp #$ff
+    beq !+
+    lda #0
+    sta en_t
+    rts
+!:  cmp #$80
+    ror
+    ror en_t
+    rts
+
+// ---- behaviours (X = sprite on entry; must end with en_finish) ----------
 
 control_blob:
     jsr en_common
@@ -588,10 +745,10 @@ control_blob:
 !:  lda sprite_data_2+sprite_dir,x
     and #1
     sta sprite_data_2+sprite_dir,x
-    lda #24                     // 0.75 px per frame
+    lda #24*EN_THINK            // 0.75 px per frame
     ldy sprite_data_2+sprite_dir,x
     beq !+
-    lda #<-24
+    lda #<-24*EN_THINK
 !:  sta sprite_data_2+sprite_dxlo,x
     and #$80
     beq !+
@@ -609,7 +766,7 @@ control_blob:
     sta sprite_data_2+sprite_dir,x
 !:  lda sprite_data_2+sprite_dir,x
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 
 control_skel:
     jsr en_common
@@ -618,9 +775,9 @@ control_skel:
 !:  dec sprite_data_2+sprite_timer,x
     bne sk_walk
     jsr en_rnd                  // new direction: towards the player 1 in 3
-    and #63
+    and #31
     clc
-    adc #40
+    adc #40/EN_THINK
     sta sprite_data_2+sprite_timer,x
     jsr en_rnd
     cmp #85
@@ -643,7 +800,7 @@ sk_walk:
     sta sprite_data_2+sprite_timer,x
 !:  lda sprite_data_2+sprite_dir,x
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 
 control_ghost:
     jsr en_common
@@ -656,20 +813,20 @@ control_ghost:
     bcc gh_y
     lda en_sx
     beq !+
-    add16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#12:#0
+    add16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#12*EN_THINK:#0
     jmp gh_y
-!:  sub16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#12:#0
+!:  sub16 sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:sprite_data_2+sprite_global_xlo,x:sprite_data_2+sprite_global_xhi,x:#12*EN_THINK:#0
 gh_y:
     lda en_ay
     cmp #3
     bcc gh_done
     lda en_sy
     beq !+
-    add16 sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:#12:#0
+    add16 sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:#12*EN_THINK:#0
     jmp gh_done
-!:  sub16 sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:#12:#0
+!:  sub16 sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:sprite_data_2+sprite_global_ylo,x:sprite_data_2+sprite_global_yhi,x:#12*EN_THINK:#0
 gh_done:
-    jmp control_coords
+    jmp en_finish
 
 control_cycl:
     jsr en_common
@@ -716,9 +873,9 @@ cy_patrol:
     dec sprite_data_2+sprite_timer,x
     bne !+
     jsr en_rnd
-    and #63
+    and #31
     clc
-    adc #50
+    adc #50/EN_THINK
     sta sprite_data_2+sprite_timer,x
     jsr en_rnd
     and #3
@@ -735,7 +892,7 @@ cy_patrol:
     sta sprite_data_2+sprite_timer,x
 !:  lda sprite_data_2+sprite_dir,x
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 cy_charge:
     lda sprite_data_2+sprite_dir,x
     asl
@@ -747,23 +904,23 @@ cy_charge:
     bne !+
     lda #2                      // hit a wall: catch its breath
     sta sprite_data_2+sprite_state,x
-    lda #60
+    lda #60/EN_THINK
     sta sprite_data_2+sprite_timer,x
 !:  lda sprite_data_2+sprite_dir,x
     clc
     adc #4
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 cy_rest:
     dec sprite_data_2+sprite_timer,x
     bne !+
     lda #0
     sta sprite_data_2+sprite_state,x
-    lda #30
+    lda #30/EN_THINK
     sta sprite_data_2+sprite_timer,x
 !:  lda sprite_data_2+sprite_dir,x
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 
 control_jelly:
     jsr en_common
@@ -775,7 +932,7 @@ control_jelly:
     bne je_rise
     lda #INTANGIBLE             // sink
     sta sprite_data_2+sprite_state,x
-    lda #40
+    lda #40/EN_THINK
     sta sprite_data_2+sprite_timer,x
     jmp je_anim
 je_rise:
@@ -816,16 +973,16 @@ je_place:
 !:  lda #0
     sta sprite_data_2+sprite_state,x
     jsr en_rnd
-    and #63
+    and #31
     clc
-    adc #90
+    adc #90/EN_THINK
     sta sprite_data_2+sprite_timer,x
 je_anim:
     lda sprite_data_2+sprite_state,x
     beq !+
     lda #1
 !:  jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 
 control_wiz:
     jsr en_common
@@ -833,7 +990,7 @@ control_wiz:
     rts
 !:  lda #0
     jsr sprite_anim_to
-    jsr control_coords
+    jsr en_finish
     lda has_sword
     bne wz_done
     lda en_ax
@@ -866,7 +1023,7 @@ control_prin:
     jmp victory
 !:  lda #0
     jsr sprite_anim_to
-    jmp control_coords
+    jmp en_finish
 
 // ---- the wizard's message ----------------------------------------------
 // Stops the AGSP display, shows a plain text screen (ROM font, using the

@@ -87,6 +87,11 @@ n_swB1:   .byte 0     // badlines of rows >= 1 holding the pointer slots, 0 = no
 n_swB2:   .byte 0
 ag_swidx: .byte 0
 ag_irqline: .byte 0
+an_sl:    .byte 0
+an_t:     .byte 0
+.const AG_SW_AHEAD = 4  // pointer-row switch IRQ this many lines before its badline
+                        // (IRQ entry under heavy sprite DMA: ~1.5 lines to ag_do_swap)
+an_kind:  .byte 0     // the scheduled event IRQ: 0 rewrite, 1 pointer-row switch
 n_gl:     .fill 8, 0  // raster lines on which sprites may read AG_ALT's slots
 n_gln:    .byte 0
 fr_n:     .byte 0
@@ -356,18 +361,15 @@ ag_fix_rows:
     ldx n_gln
     lda n_gl-1,x
     sta fr_glmax
-    ldx #7
+    ldx mx_base_f           // every sprite of the frame (front plan)
     jmp fr_spr
 fr_skip:
     jmp fr_next             // (trampoline for the short branches below)
 fr_spr:
-    lda $d015
-    and bitset,x
-    beq fr_skip
-    txa
-    asl
-    tay
-    lda $d001,y
+    cpx mx_end
+    bcc !+
+    rts
+!:  lda mx_y,x
     sta fr_y
     lda fr_glmax            // shown lines y+1..y+21 vs [glmin, glmax]
     sec
@@ -380,13 +382,13 @@ fr_spr:
     bcc !+
     cmp #22
     bcs fr_skip
-!:  lda AG_SCREEN+$3f8,x    // source: the sprite's real frame (pointer * 64)
+!:  lda mx_ptr,x            // source: the sprite's real frame (pointer * 64)
     lsr
     lsr
     sta fr_s0+2
     sta fr_s1+2
     sta fr_s2+2
-    lda AG_SCREEN+$3f8,x
+    lda mx_ptr,x
     asl
     asl
     asl
@@ -396,7 +398,7 @@ fr_spr:
     sta fr_s0+1
     sta fr_s1+1
     sta fr_s2+1
-    txa                     // destination: block AG_PTRCODE+n
+    lda mx_slot,x           // destination: block AG_PTRCODE + hardware sprite
     clc
     adc #AG_PTRCODE
     pha
@@ -447,10 +449,8 @@ fr_lnext:
     bne fr_line
     ldx fr_n
 fr_next:
-    dex
-    bmi !+
+    inx
     jmp fr_spr
-!:  rts
 
 // ag_sw_row: note the row showing visible offset ag_o (if visible)
 ag_sw_row:
@@ -525,37 +525,99 @@ ag_do_swap:
 ds_done:
     rts
 
-// ag_next: schedule the next pointer-row switch (doing it right away when
-// it is too close for an IRQ), else the bottom IRQ.
+// ag_next: the event dispatcher. Events during the frame: multiplexer
+// rewrites (mymux.s plan entries mx_i..mx_end, at line mx_line) and
+// pointer-row switches (n_swB1/2, starting AG_SW_AHEAD lines before their
+// badline, line an_sl). Runs every event that is due (within 2 lines), then schedules an IRQ
+// for the next one, or the bottom IRQ. mux_plan keeps the rewrites clear of
+// the switches' busy-waits (B-7..B) and spaced so each finishes in time.
+// Returns C = 1 when a pointer-row switch at line 245/246 leaves no time to
+// schedule the bottom IRQ: the caller does the bottom work.
 ag_next:
-    ldx ag_swidx
-    cpx #2
-    bcs an_bot
-    lda n_swB1,x
+    ldx mx_i
+an_mloop:
+    cpx mx_end
+    bcs an_nomux
+    lda mx_line,x
+    cmp an_sl
+    bcs an_nomux            // the pointer-row switch comes first
+    sta an_t                // never before its line (the old sprite may
+    lda $d012               // still be showing until then)
+    cmp an_t
+    bcs an_now
+    adc #1
+    cmp an_t
+    bcc an_irq_mux          // 2+ lines away: an IRQ
+!:  lda $d012               // the next line: wait for it
+    cmp an_t
+    bcc !-
+an_now:
+    MX_WRITE()              // multiplexer rewrite, now
+an_wdone:
+    inx
+    stx mx_i
+    jmp an_mloop
+an_irq_mux:
+    lda #0
+    sta an_kind
+    lda an_t
+    jmp an_irq
+an_nomux:
+    lda an_sl
+    cmp #255
     beq an_bot
-    sec
-    sbc #2
-    sta ag_irqline
-    lda $d012
-    clc
-    adc #2
-    cmp ag_irqline
-    bcc an_irq
-    ldx ag_swidx
+    jsr an_due
+    bcc an_irq_sw
+    ldx ag_swidx            // pointer-row switch, now
     lda n_swB1,x
     jsr ag_do_swap
     inc ag_swidx
+    jsr an_setsl
+    lda ag_B
+    cmp #AG_BOT_LINE-1
+    bcs !+
     jmp ag_next
-an_irq:
-    lda ag_irqline
+!:  sec                     // (the caller does the bottom work)
+    rts
+an_irq_sw:
+    ldx #1
+    stx an_kind
+an_irq:                     // A = line of the next event
     sta $d012
-    lda #<ag_irq_swap
+    lda #<ag_irq_evt
     sta $fffe
-    lda #>ag_irq_swap
+    lda #>ag_irq_evt
     sta $ffff
+    clc
     rts
 an_bot:
-    jmp ag_set_bottom
+    jsr ag_set_bottom
+    clc
+    rts
+
+// an_setsl: an_sl = line of the next pointer-row switch event (255: none)
+an_setsl:
+    lda #255
+    ldx ag_swidx
+    cpx #2
+    bcs !+
+    ldy n_swB1,x
+    beq !+
+    tya
+    sec
+    sbc #AG_SW_AHEAD
+!:  sta an_sl
+    rts
+
+// an_due: A = event line; C = 1 if it is due (within 2 lines); keeps A
+an_due:
+    sta an_t
+    lda $d012
+    clc
+    adc #2
+    cmp an_t
+    lda an_t
+    rts
 
 ag_set_bottom:
     lda #<ag_irq_bot
@@ -566,22 +628,23 @@ ag_set_bottom:
     sta $d012
     rts
 
-// ---- pointer-row IRQ (line B-2) -------------------------------------
-ag_irq_swap:
+// ---- event IRQ: multiplexer rewrite or pointer-row switch (B-4) ----
+ag_irq_evt:                 // a pointer-row switch or multiplexer rewrite is due
     pha
     txa
     pha
     tya
     pha
-    asl $d019               // ack first: the next IRQ may be close
-    ldx ag_swidx
-    lda n_swB1,x
-    jsr ag_do_swap
-    lda ag_B
-    cmp #AG_BOT_LINE-1
-    bcs sw_chain            // B >= 245: too close to set the bottom IRQ
-    inc ag_swidx
+    lda an_kind             // straight to the work (it has a deadline; other
+    bne ae_swap             // sprites' DMA leaves ~44 cycles per line)
+    ldx mx_i                // a rewrite
+    MX_WRITE()
+ae_wdone:
+    inc mx_i
+ae_next:
+    asl $d019               // ack before scheduling the next IRQ
     jsr ag_next
+    bcs sw_chain            // pointer row at line 245/246: bottom work now
     pla
     tay
     pla
@@ -589,6 +652,16 @@ ag_irq_swap:
     pla
     rti
 
+ae_swap:                    // a pointer-row switch
+    ldx ag_swidx
+    lda n_swB1,x
+    jsr ag_do_swap
+    inc ag_swidx
+    jsr an_setsl
+    lda ag_B
+    cmp #AG_BOT_LINE-1
+    bcc ae_next
+    asl $d019
 sw_chain:                   // do the bottom IRQ's work from here
 !:  lda $d012
     cmp #AG_BOT_LINE
@@ -625,13 +698,14 @@ ag_bot_body:
     sta p_cx
     lda c_cy
     sta p_cy
-    jsr copy_sprites
+    jsr mx_commit
     lda #0
     sta ag_blank            // a commit carries a consistent ring: unblank
     sta ag_commit
     lda #1
     sta ag_frame
 !:  jsr ag_prepare
+    jsr mx_frame_setup      // (the dispatcher reads it from line 81 on)
     inc ag_vbl
     // The next frame's top IRQ is scheduled now and interrupts may nest from
     // here on: the rest (sprites, pointer rows, music) can never make the top
@@ -644,19 +718,8 @@ ag_bot_body:
     sta $d012
     asl $d019               // ack our own raster flag before cli
     cli
-    lda #0
-    sta sprite_logical_iterator
-    sta sprite_hw_iterator
-ab_loop:
-    lda sprite1_count
-    cmp sprite_logical_iterator
-    beq ab_done
-    jsr do_sprite
-    jmp ab_loop
+    jsr mx_apply_initial    // hardware sprites for the top of the frame
 ab_done:
-    ldx sprite1_count
-    lda sprite_enable_bits,x
-    sta $d015
     jsr ag_fix_rows
     jsr sidplay
 ab_end:                     // (tools/irq_audit.py: bottom work done)
@@ -755,6 +818,7 @@ ag_wr_norm:
     ldx #1
 ti_sched:
     stx ag_swidx
+    jsr an_setsl
     asl $d019               // ack before scheduling the next IRQ
     jsr ag_next
 ti_out:

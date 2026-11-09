@@ -97,8 +97,14 @@ def main():
             print(f"//   {name}: " + ", ".join(f"{v} {k}" for k, v in kinds.items()))
     print(".segment TABLES")
     print(f".const SPAWN_N = {len(spawns)}")
+    per = 4
+    print(f".const SPAWN_PER_FRAME = {per}          // spawn points checked per frame")
+    print(f".const SPAWN_GRACE = {-(-len(spawns) // per) + 2}             "
+          f"// frames after a full redraw in which monsters may spawn in view (one sweep)")
     for field, i in (("spawn_tx", 0), ("spawn_ty", 1), ("spawn_type", 2)):
         print(f"{field}: .byte " + ",".join(str(s[i]) for s in spawns))
+    for field, i in (("spawn_cx", 0), ("spawn_cy", 1)):    # tile centre in chars
+        print(f"{field}: .byte " + ",".join(str(s[i] * 4 + 2) for s in spawns))
     print("spawn_state: .fill SPAWN_N, 0   // 0 idle, 1 active, 2 dead")
 
 

@@ -40,6 +40,7 @@ ag_tx:       .byte 0
 ag_rboff:    .byte 0
 ag_n:        .byte 0
 ag_i:        .byte 0
+ag_len:      .byte 0
 ag_k:        .byte 0
 ag_t:        .word 0
 ag_tmp:      .byte 0
@@ -246,62 +247,112 @@ br_k3: lda $ffc0,y
     bne br_loop
     rts
 
-// ag_blit_row: copy X chars from the row buffer into the ring at ag_s
-// (ag_s is clobbered on the slow path)
+// ag_blit_row: copy X chars from the row buffer (from ag_rboff) into the
+// ring at ag_s, in segments with a tight loop each: plain slots, mirrored
+// slots (977..1015 and 0..38 also go to AG_ALT), and the pointer slots
+// 1016..1023 one by one (ag_put). ag_s ends after the row.
 ag_blit_row:
     stx ag_n
+    lda ag_rboff
+    sta ag_i
+bl_seg:
+    lda ag_n
+    bne !+
+    rts
+!:  sta ag_len                 // the rest, unless a boundary comes first
+    ldx #0                     // plain
     lda ag_s+1
-    beq bl_p0
+    beq bl_page0
     cmp #3
-    bcc bl_fast
+    bne bl_go                  // 256..767: plain (and 40 chars stay below 977)
     lda ag_s
-    clc
-    adc ag_n
-    bcs bl_slow
-    cmp #<977+1            // ends at or before slot 977?
-    bcs bl_slow
-    bcc bl_fast
-bl_p0:
+    cmp #<1016
+    bcc !+
+    jmp bl_ptr
+!:  cmp #<977
+    bcs bl_mir3
+    lda #<977                  // plain up to 977
+    sec
+    sbc ag_s
+    jmp bl_clamp
+bl_mir3:
+    ldx #1                     // mirrored up to 1016
+    lda #<1016
+    sec
+    sbc ag_s
+    jmp bl_clamp
+bl_page0:
     lda ag_s
-    cmp #39                // starts after the mirrored slots 0..38?
-    bcc bl_slow
-bl_fast:
+    cmp #39
+    bcs bl_go                  // 39..255: plain
+    ldx #1                     // mirrored up to 39
+    lda #39
+    sec
+    sbc ag_s
+bl_clamp:
+    cmp ag_len
+    bcs bl_go
+    sta ag_len
+bl_go:
     lda ag_s
     sta ag_ps
     sta ag_pk
+    sta bl_alt+1
     lda ag_s+1
     ora #>AG_SCREEN
     sta ag_ps+1
     lda ag_s+1
-    ora #$d8
+    ora #>$d800
     sta ag_pk+1
-    ldx ag_rboff
+    lda ag_s+1
+    ora #>AG_ALT
+    sta bl_alt+2
     ldy #0
-bl_floop:
+    txa
+    ldx ag_i
+    cmp #0
+    bne bl_mirl
+bl_plain:
     lda ag_rbc,x
     sta (ag_ps),y
     lda ag_rbk,x
     sta (ag_pk),y
     inx
     iny
-    cpy ag_n
-    bne bl_floop
-    rts
-bl_slow:                   // wraps at 1024 or touches the mirrored slots
-    lda ag_rboff
-    sta ag_i
-bl_sloop:
+    cpy ag_len
+    bne bl_plain
+    beq bl_adv
+bl_mirl:
+    lda ag_rbc,x
+    sta (ag_ps),y
+bl_alt:
+    sta AG_ALT,y
+    lda ag_rbk,x
+    sta (ag_pk),y
+    inx
+    iny
+    cpy ag_len
+    bne bl_mirl
+bl_adv:
+    stx ag_i
+bl_next:
+    lda ag_n
+    sec
+    sbc ag_len
+    sta ag_n
+    lda ag_len
+    jsr ag_slot_add
+    jmp bl_seg
+bl_ptr:                        // a pointer slot: its glyph copy (ag_put)
     ldx ag_i
     lda ag_rbk,x
     sta ag_k
     lda ag_rbc,x
     jsr ag_put
-    lda #1
-    jsr ag_slot_add
     inc ag_i
-    dec ag_n
-    bne bl_sloop
-    rts
+    lda #1
+    sta ag_len
+    bne bl_next
 
 // ag_draw_row: A = wy, X = wx of screen column 0, Y = column count,
 // ag_s = ring slot of screen column 0
@@ -532,6 +583,8 @@ su_far:                    // jumped more than one char: redraw everything,
     lda ag_ncy
     sta ag_cy
     jsr ag_redraw_all      // (ag_blank is lifted by the IRQ with the commit)
+    lda #SPAWN_GRACE       // new view: monsters may spawn in it for a moment
+    sta spawn_grace
 su_done:
     lda ag_S
     sta c_S

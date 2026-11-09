@@ -10,6 +10,7 @@ import vice
 import game_check
 import monster_check
 import irq_audit
+import mux_check
 
 ROOT = vice.ROOT
 TOOL = os.path.join(ROOT, "tools", "vice.py")
@@ -84,6 +85,20 @@ def main():
               f"{crossings} frames with a sprite there, {bad} bad")
         bad = game_check.check_top_clip(v, verbose=False)
         check(bad == 0, f"sprites slide in at the top edge (clipped 1..20 rows): {bad} bad")
+        fails, layouts, most = mux_check.frozen(v, verbose=True)   # (prints failures)
+        check(not fails, f"multiplexer: {layouts} layouts of up to {most} sprites pixel-exact, "
+                         f"plan as modelled (rewrite timing): {len(fails)} bad {fails[:3]}")
+        v.close()
+
+        # multiplexer with a crowd of live monsters, in a fresh game
+        subprocess.run([TOOL, "start"], check=True, capture_output=True)
+        v = vice.Vice()
+        num = v.checkpoint(vice.addr("forever"))
+        v.run_until_hit(num, 60)
+        bad, irq, lo, hi, upd, spare = mux_check.live(v, verbose=False)
+        check(bad == 0 and not irq and lo >= 10,
+              f"multiplexer, live crowd: {lo}..{hi} sprites, {bad} bad frames, "
+              f"IRQ chain {'intact' if not irq else irq[:2]} ({upd:.2f} updates/frame)")
         v.close()
 
         # gameplay, in a fresh game (the checks above froze the monsters)

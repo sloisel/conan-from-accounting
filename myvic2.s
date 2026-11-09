@@ -148,63 +148,8 @@ clip_one:
     rts
 
 .segment MAIN
-// The raster interrupts live in myagsp.s; ag_irq_bot calls copy_sprites
-// (on commit) and do_sprite for each sprite.
-
-copy_sprites:
-	lda sprite2_count
-	sta sprite1_count
-	ldx #0
-copy_sprites_loop:
-	lda sprite_data_2+sprite_xlo,x
-	sta sprite_data_1+sprite_xlo,x
-	lda sprite_data_2+sprite_xhi,x
-	sta sprite_data_1+sprite_xhi,x
-	lda sprite_data_2+sprite_y,x
-	sta sprite_data_1+sprite_y,x
-	lda sprite_data_2+sprite_color,x
-	sta sprite_data_1+sprite_color,x
-	lda sprite_data_2+sprite_pointer,x
-	sta sprite_data_1+sprite_pointer,x
-	inx
-	cpx sprite1_count
-	bcc copy_sprites_loop
-	rts
-
-// do_sprite: copy sprite data from sprite_data_1 to frame buffer.
-do_sprite:
-	ldx sprite_logical_iterator
-    lda sprite_hw_iterator
-    asl
-    tay
-    lda sprite_data_1+sprite_xlo,x
-    sta $d000,y
-    lda sprite_data_1+sprite_y,x
-    sta $d001,y
-	ldy sprite_hw_iterator
-    lda sprite_data_1+sprite_color,x
-    sta $d027,y
-    lda sprite_data_1+sprite_pointer,x
-    sta AG_SCREEN+$3f8,y
-    lda sprite_data_1+sprite_xhi,x
-    beq sprite_clear_xhi
-    lda $d010
-    ora bitset,y
-    jmp sprite_store_xhi
-sprite_clear_xhi:
-    lda $d010
-    and bitclear,y
-sprite_store_xhi:
-    sta $d010
-	inc sprite_logical_iterator
-	iny
-    cpy #8
-    bne sprite_end
-	ldy #0
-sprite_end:
-    sty sprite_hw_iterator
-    rts
-
+// The raster interrupts live in myagsp.s; the multiplexer (mymux.s) writes
+// the hardware sprite registers.
 
 .var PRA  =  $dc00            //; CIA#1 (Port Register A)
 .var DDRA =  $dc02            //; CIA#1 (Data Direction Register A)

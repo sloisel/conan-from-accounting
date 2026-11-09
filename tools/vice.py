@@ -153,6 +153,18 @@ class Vice:
             off += size + 1
         return out
 
+    def set_reg(self, name, value):
+        """set a CPU register by name (as regs() reports them)"""
+        _, d = self.cmd(0x83, b"\x00")
+        (n,) = struct.unpack_from("<H", d)
+        off, ids = 2, {}
+        for _ in range(n):
+            size = d[off]
+            rid, nlen = d[off + 1], d[off + 3]
+            ids[d[off + 4: off + 4 + nlen].decode()] = rid
+            off += size + 1
+        self.cmd(0x32, struct.pack("<BHBBH", 0, 1, 3, ids[name], value))
+
     def checkpoint(self, a, op=4):
         """op: 1=load, 2=store, 4=exec. Temporary, stops the CPU when hit.
         Returns the checkpoint number."""
@@ -348,6 +360,12 @@ def main(argv):
         for _ in range(100):
             try:
                 Vice(timeout=1).close()
+                if sys.platform == "darwin" and not watch:
+                    # -minimized does not always hold: hide the app (like
+                    # Cmd-H); emulation and the monitor are unaffected
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to set '
+                                    'visible of (every process whose name contains "x64sc-bg") to false'],
+                                   capture_output=True)
                 print("VICE up")
                 return
             except OSError:
