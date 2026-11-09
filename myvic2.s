@@ -1,21 +1,12 @@
 .segment MAIN
 
-initvic2:	
+initvic2:
 	lda $dd00 // select VIC bank #0
 	and #%11111100
 	ora #%00000011
 	sta $dd00
-    lda #0
-    sta vicflag
-    lda #vicvposval
-    sta vicv
-    sta vicvpos
-    lda #vichposval
-    sta vich
-    sta vichpos
-    lda #vicbuf1
-	sta vicbuf
-    sta vicpointers // set screen buffer and character map addresses
+    lda #vichposval // multicolour, 38 columns
+    sta $d016
     lda #COLR_SCREEN
     sta $d020 // set border color
     sta $d021 // and background color
@@ -29,49 +20,16 @@ initvic2:
     sta $D025
     lda #spritecolor2 // sprite multicolor 2
     sta $D026
-	//      lda #>charbuf
-	//      sta 648 // Try to keep Basic alive by telling it where the screen is
-        rts
+    rts
 
 .segment TABLES
+// sprite_enable_bits[n]: $d015 value with the first n hardware sprites on
 sprite_enable_bits:
-    .fill 32,(2<<i)-1
+    .fill 32, i >= 8 ? $ff : (1 << i) - 1
 
 .segment MAIN
-irq:
-	sta atemp+1
-	stx xtemp+1
-	sty ytemp+1
-
-	lsr $d019 // acknowledge interrupt
-	jsr copy_sprites
-	set8 sprite_logical_iterator:#0
-	set8 sprite_hw_iterator:#0
-irq_loop:
-	lda sprite1_count
-	cmp sprite_logical_iterator
-	beq irq_loop_done
-	jsr do_sprite
-	jmp irq_loop
-irq_loop_done:
-    ldx sprite1_count
-    lda sprite_enable_bits,x
-    sta $d015
-	lda vicbuf
-	cmp vicpointers
-	beq irqdone
-	sta vicpointers
-	lda vich
-	sta vichpos
-	lda vicv
-	sta vicvpos
-
-irqdone:
-	jsr sidplay
-atemp:	lda #$00
-xtemp:	ldx #$00
-ytemp:	ldy #$00
-	rti
+// The raster interrupts live in myagsp.s; ag_irq_bot calls copy_sprites
+// (on commit) and do_sprite for each sprite.
 
 copy_sprites:
 	lda sprite2_count
@@ -107,8 +65,7 @@ do_sprite:
     lda sprite_data_1+sprite_color,x
     sta $d027,y
     lda sprite_data_1+sprite_pointer,x
-    sta charbuf1+1016,y
-    sta charbuf2+1016,y
+    sta AG_SCREEN+$3f8,y
     lda sprite_data_1+sprite_xhi,x
     beq sprite_clear_xhi
     lda $d010
@@ -139,8 +96,15 @@ sprite_end:
 		lda #mask
 		sta PRA
 		lda PRB
+		and debug_keys+col // lets the debugger inject keypresses (all $ff = no effect)
 		sta keyboard+col
 }
+
+.segment TABLES
+// debug_keys: AND-mask applied to each keyboard matrix row. A cleared bit
+// is a "pressed" key. Written by tools/vice.py through the VICE monitor.
+debug_keys: .fill 8,$ff
+.segment MAIN
 
 readkb:
          lda #%11111111  // CIA#1 port A = outputs 

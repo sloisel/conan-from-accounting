@@ -4,10 +4,11 @@
 //812
 .var U=116
 .var V=82
-.var Ux=96
-.var Uy=72
-.var Vx=68
-.var Vy=51
+// speeds in 1/32 pixel per frame (the game loop now runs at 50 Hz)
+.var Ux=48
+.var Uy=36
+.var Vx=34
+.var Vy=26
 .var Sx=32*24
 .var Tx=Sx-2*32
 .var Sy=32*21
@@ -24,7 +25,7 @@
 	sword_x: .word 0, 0, Tx, Sx, Tx,  0,-Tx,-Sx,-Tx
 	sword_y: .word 0,Sy, Ty,  0,-Ty,-Sy,-Ty,  0, Ty
 
-.var st=3
+.var st=6
 .var player_list = List().add(
 		st,sp0+0,st,sp0+2,st,sp0+0,st,sp0+3,0,
 		st,sp0+5,st,sp0+7,st,sp0+5,st,sp0+8,0,
@@ -34,22 +35,22 @@
 		st,sp0+25,st,sp0+27,st,sp0+25,st,sp0+28,0,
 		st,sp0+30,st,sp0+32,st,sp0+30,st,sp0+33,0,
 		st,sp0+35,st,sp0+37,st,sp0+35,st,sp0+38,0,
-		255,sp0+0,10,sp0+1,0,
-		255,sp0+5,10,sp0+6,0,
-		255,sp0+10,10,sp0+11,0,
-		255,sp0+15,10,sp0+16,0,
-		255,sp0+20,10,sp0+21,0,
-		255,sp0+25,10,sp0+26,0,
-		255,sp0+30,10,sp0+31,0,
-		255,sp0+35,10,sp0+36,0,
-		4,sp0+4,0,
-		4,sp0+9,0,
-		4,sp0+14,0,
-		4,sp0+19,0,
-		4,sp0+24,0,
-		4,sp0+29,0,
-		4,sp0+34,0,
-		4,sp0+39,0)
+		255,sp0+0,20,sp0+1,0,
+		255,sp0+5,20,sp0+6,0,
+		255,sp0+10,20,sp0+11,0,
+		255,sp0+15,20,sp0+16,0,
+		255,sp0+20,20,sp0+21,0,
+		255,sp0+25,20,sp0+26,0,
+		255,sp0+30,20,sp0+31,0,
+		255,sp0+35,20,sp0+36,0,
+		8,sp0+4,0,
+		8,sp0+9,0,
+		8,sp0+14,0,
+		8,sp0+19,0,
+		8,sp0+24,0,
+		8,sp0+29,0,
+		8,sp0+34,0,
+		8,sp0+39,0)
 .macro anim(z) {
 	.for(var k=0;k<z.size();k++) {
 		.byte z.get(k)
@@ -64,20 +65,20 @@
 player_anim: anim(player_list)
 player_index: index(player_list)
 .var sword_list = List().add(
-		5,sp0+40,0,
-		5,sp0+41,0,
-		5,sp0+42,0,
-		5,sp0+43,0,
-		5,sp0+44,0,
-		5,sp0+45,0,
-		5,sp0+46,0,
-		5,sp0+47,0,
-		5,sp0+48,0)
+		10,sp0+40,0,
+		10,sp0+41,0,
+		10,sp0+42,0,
+		10,sp0+43,0,
+		10,sp0+44,0,
+		10,sp0+45,0,
+		10,sp0+46,0,
+		10,sp0+47,0,
+		10,sp0+48,0)
 sword_anim: anim(sword_list)
 sword_index: index(sword_list)
 
 .var star_list = List().add(
-	5,sp0+50,5,sp0+51,5,sp0+52,5,sp0+53,0
+	10,sp0+50,10,sp0+51,10,sp0+52,10,sp0+53,0
 )
 star_anim: anim(star_list)
 star_index: index(star_list)
@@ -86,12 +87,11 @@ animations: .word player_anim, sword_anim, star_anim
 indices: .word player_index, sword_index, star_index
 .segment MAIN
 
+// camera: player shown at (160, 83) of the 304x166 AGSP window
 .var delx=160*32
-//.var maxx=55296
-.var maxx=55808
-.var dely=100*32
-//.var maxy=59136
-.var maxy=59392
+.var maxx=216*256     // camera col + 39 must stay on the 256-char map
+.var dely=83*32
+.var maxy=234*256     // camera row + 21 must stay on the map
 
 // control_path_test: test to see if a sprite can move to a given location.
 // Arguments:
@@ -244,7 +244,18 @@ control_coords:
 	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
 	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
 	shr16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x
-	add16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:#<42:#>42
+	add16 sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:sprite_data_2+sprite_y,x:sprite_data_2+sprite_yhi,x:#<AG_SPRITE_DY:#>AG_SPRITE_DY
+	// sprites may not touch the cycle-exact raster code above the window:
+	// park anything above it at y=0 (top border)
+	lda sprite_data_2+sprite_yhi,x
+	bne control_coords_park
+	lda sprite_data_2+sprite_y,x
+	cmp #AG_SPRITE_YMIN
+	bcs control_coords_ok
+control_coords_park:
+	lda #0
+	sta sprite_data_2+sprite_y,x
+control_coords_ok:
 	rts
 
 control_sword:
@@ -346,13 +357,15 @@ control_player_end:
 // Register Y: desired sprite controller.
 // Returns:
 // Register X: sprite index.
-// If no sprite is available, X is set to 32 and zero flag is set. So you can detect this with:
+// If no sprite is available, carry is set. So you can detect this with:
 //    jsr sprite_alloc
-//    beq sprite_alloc_failed
+//    bcs sprite_alloc_failed
+// (Carry rather than zero flag: Z would also be set on success whenever the
+// controller number is 0.)
 sprite_alloc:
     ldx sprite2_count
     cpx #32
-    bne sprite_alloc_ok
+    bcc sprite_alloc_ok
     rts
 sprite_alloc_ok:
     inc sprite2_count
@@ -360,6 +373,7 @@ sprite_alloc_ok:
     tax
     tya
 	sta sprite_data_2+sprite_controller,x
+    clc
     rts
 
 // sprite_set_anim: set sprite animation.
@@ -415,7 +429,7 @@ sprite_reader:
 sprite_writer:
 	sta $ffff,x
     jsr sprite_alloc
-	beq finish
+	bcs finish
 	lda #0
 	jsr sprite_init
 

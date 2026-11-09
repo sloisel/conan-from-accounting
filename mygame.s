@@ -44,7 +44,7 @@
 	[name="01", type="prg", segments="SPLASHSCREEN,SPLASHBITMAP"],
 	[name="02", type="prg", segments="SPLASHCOLOR"],
 	[name="03", type="prg", sidFiles="Degalvanized.sid" ],
-	[name="04", type="prg", segments="TILECHAR,TILECOL,MAIN,CHARSET,SPRITES,PATHING" ],
+	[name="04", type="prg", segments="TILECHAR,TILECOL,TILETAG,MAIN,CHARSET,SPRITES,PATHING" ],
 	[name="05", type="prg", segments="TABLES"],
 	[name="06", type="prg", segments="MAP"],
 	}
@@ -73,6 +73,7 @@
 #import "ultimate.s"
 #import "sprites.s"
 #import "myloader.s"
+#import "myagsp.s"
 #import "mydraw.s"
 #import "mycontrol.s"
 #import "myvic2.s"
@@ -92,21 +93,17 @@ bitclear: .byte 255-1,255-2,255-4,255-8,255-16,255-32,255-64,255-128
 
 	.segment ZEROPAGE
 	.zp {
-screen_draw_ptr:	.word 0
-tile_draw_ptr:	.word 0,0,0,0
 row_map_ptr:	.word 0
-row_map_col:	.byte 0
-screen_map_col:	.byte 0
-vicflag:	.byte 0
-vich:	.byte 0
-vicv:	.byte 0
-vicbuf:	.byte 0
+ag_s:	.word 0     // ring slot (mydraw.s)
+ag_mp:	.word 0     // map pointer
+ag_pc:	.word 0     // tile char pointer
+ag_pkc:	.word 0     // tile colour pointer
+ag_ps:	.word 0     // screen pointer
+ag_pk:	.word 0     // colour RAM pointer
 temp:	.word 0
 temp2:	.word 0
 temp3:	.word 0
 temp4:  .word 0
-screen_x:	.byte 0
-screen_y:	.byte 0
 smooth_x: 	.word 0
 smooth_y: 	.word 0
 keyboard: .fill 8,0
@@ -130,9 +127,6 @@ rand_index: .byte 0
 
 main:
 	jsr initvic2
-	ldx #<irq
-	ldy #>irq
-	jsr setup_irq
 	set8 sprite_data_2+sprite_global_xlo:#<10*8*32
 	set8 sprite_data_2+sprite_global_xhi:#>10*8*32
 	set8 sprite_data_2+sprite_global_ylo:#<245*8*32
@@ -157,12 +151,17 @@ main:
 	set8 sprite_reader+1:#<xxyy
 	set8 sprite_reader+2:#>xxyy
 	jsr sprite_from_tile
+	jsr control_player     // place the camera
+	jsr exec_controllers
+	jsr exec_animations
+	jsr ag_init            // draw the ring, start the raster IRQs
 forever:
     jsr readkb
 	jsr control_player
 	jsr exec_controllers
 	jsr exec_animations
-	jsr smooth_flip
+	jsr scroll_update      // draw newly exposed map edges
+	jsr ag_commit_frame    // hand position + sprites to the IRQ, wait a frame
 	jmp forever
 //	jmp ($300)
 
