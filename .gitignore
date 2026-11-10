@@ -17,3 +17,7 @@ screenshots/
 
 # python
 __pycache__/
+
+# web build (GitHub Pages) / browser tests
+_site/
+.playwright-mcp/

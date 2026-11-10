@@ -1,0 +1,51 @@
+# Build the disk image and publish it with the web page (web/index.html,
+# EmulatorJS) on GitHub Pages, on every push to main.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy
+      - run: make mygame.d64
+      - name: Site
+        run: |
+          mkdir _site
+          cp mygame.d64 conan2.png _site/
+          mv _site/conan2.png _site/conan.png
+          sed "s/__VERSION__/${GITHUB_SHA::8}/" web/index.html > _site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
