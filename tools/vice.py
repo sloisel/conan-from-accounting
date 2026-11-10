@@ -11,7 +11,8 @@ Chain commands with a lone "," to keep the CPU halted between them, e.g.
                                      background-only (no focus steal), minimized,
                                      emulator sound off, warp speed
                                      (--watch: normal window, sound, real time)
-  tools/vice.py play [image]         a window just for playing (no monitor port)
+  tools/vice.py play [image]         a window just for playing (no monitor port;
+                                     joystick 2 on the cursor keys, space = fire)
   tools/vice.py stop                 quit VICE
   tools/vice.py shot [file.png]      screenshot (visible area, 2x scaled)
   tools/vice.py peek ADDR [LEN]      hex dump; ADDR may be a label from mygame.vs
@@ -21,6 +22,7 @@ Chain commands with a lone "," to keep the CPU halted between them, e.g.
   tools/vice.py tap FRAMES KEY...    hold keys for FRAMES video frames then release
   tools/vice.py frames N             run exactly N video frames (50 = 1s on PAL)
   tools/vice.py wait SECONDS         let the emulator run (wall clock)
+  tools/vice.py boot                 after start: into the main loop, past the controls box
   tools/vice.py until ADDR [TIMEOUT] run until PC hits ADDR, print registers
   tools/vice.py watch ADDR [TIMEOUT] run until something stores to ADDR
   tools/vice.py step [N]            single-step N instructions, tracing PC/regs
@@ -182,6 +184,19 @@ class Vice:
     # sent while running is queued and executed at the next stop, which
     # would immediately resume after a checkpoint hit. So we always ping
     # first (guaranteed stopped) before sending exit.
+    def boot(self, timeout=60, intro=False):
+        """after `start`: run the game into its main loop. Unless intro, the
+        controls box at the start is skipped (debug_no_intro, set once the
+        game's tables are loaded: at `main`). True if it got there."""
+        num = self.checkpoint(addr("main"))
+        if not self.run_until_hit(num, timeout):
+            return False
+        if not intro:
+            self.mem_set(addr("debug_no_intro"), [1])
+            num = self.checkpoint(addr("forever"))
+            return self.run_until_hit(num, timeout)
+        return True
+
     def run_until_hit(self, num, timeout):
         """Resume and wait for checkpoint `num` to fire. True if it did.
         On return the CPU is halted at the checkpoint."""
@@ -328,7 +343,9 @@ def main(argv):
         # a window for playing: sound, real speed, *no* monitor port, so none
         # of these tools can pause, inspect or close it
         image = os.path.abspath(args[0]) if args else os.path.join(ROOT, "mygame.d64")
-        subprocess.Popen(["x64sc", "-autostart", image], stdout=subprocess.DEVNULL,
+        # a joystick in port 2 on the cursor keys, space = fire
+        joy = ["-addconfig", os.path.join(ROOT, "vice-joystick.cfg")]
+        subprocess.Popen(["x64sc"] + joy + ["-autostart", image], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
         print("VICE (play) started")
         return
@@ -434,6 +451,8 @@ def run_op(v, op, args):
                 print(f"{i:2} " + " ".join(f"{table[32 * j + i]:5}" for j in range(len(fields))))
         elif op == "regs":
             print(" ".join(f"{k}={val:04x}" for k, val in v.regs().items()))
+        elif op == "boot":                  # into the main loop (no controls box)
+            print("main loop" if v.boot() else "timeout")
         elif op == "keys":
             set_keys(v, args)
         elif op == "frames":

@@ -6,14 +6,19 @@
   contact:   touching a monster knocks the player back (hurt timer, border)
   wizard:    no sword at first, it lies by the old wizard; touching him
              pauses the game with his message in a box under the play
-             window, J continues: the player has the sword, the wizard and
-             the sword on the ground are gone
+             window, as the player walks up (before bumping into him: his
+             tile is solid), J continues: the sword leaves the ground,
+             Conan spins holding it out, the wizard stays in the way (and
+             says nothing more)
   gates:     the locked gates open with their keys; the jail's starts
              the rescue, which ends on the title picture
 
+  joystick:  a stick in port 2 moves the player (up/down/left/right = W, S,
+             A, D) and swings the sword (fire = J); the keys still work
+
   hitbox:    the sword hits exactly where the blade's pixels overlap a monster
 
-Usage: tools/monster_check.py [wizard|behaviour|sword|hitbox|contact|health|items|strip|gates|all]
+Usage: tools/monster_check.py [wizard|behaviour|sword|hitbox|contact|health|items|strip|joystick|gates|all]
 """
 import os
 import sys
@@ -185,6 +190,26 @@ def behaviour(gm):
     return ok
 
 
+def spin_check(gm, ptrs):
+    """the item spin (mycontrol.s), from its first frame to its end: Conan
+    turns through all 8 directions holding sprite 1 out (one of ptrs), then
+    stands facing the viewer with nothing in hand. Returns (ok, text)."""
+    v, a = gm.v, vice.addr
+    started = v.mem_get(a("item_spin"), 1)[0] > 0
+    dirs, seen, n = set(), set(), 0
+    while v.mem_get(a("item_spin"), 1)[0] and n < 100:
+        dirs.add(v.mem_get(a("player_dir_nz"), 1)[0])
+        if v.mem_get(gm.base + 64 + 1, 1)[0]:
+            seen.add(v.mem_get(gm.base + 32 * F["pointer"] + 1, 1)[0])
+        gm.frame()
+        n += 1
+    gm.frame(2)
+    after = v.mem_get(gm.base + 64 + 1, 1)[0] == 0 and v.mem_get(a("player_dir_nz"), 1)[0] == 1
+    r = started and dirs == set(range(1, 9)) and bool(seen) and seen <= set(ptrs) and after
+    return r, (f"spin: started {started}, {len(dirs)} directions in {n} frames, held "
+               f"{bool(seen) and seen <= set(ptrs)}, then empty-handed facing down {after}")
+
+
 def wizard(gm):
     a = vice.addr
     ok = True
@@ -206,13 +231,17 @@ def wizard(gm):
     r = bool(sw) and sy != 0 and abs(sw[0]["x"] - s["x"]) <= 40 * 32 and abs(sw[0]["y"] - s["y"]) <= 40 * 32
     print(("ok   " if r else "FAIL ") + f"the sword lies by the wizard, on screen ({bool(sw)}, y {sy})")
     ok &= r
-    gm.put(0, s["x"] + 6 * 32, s["y"])                      # walk up to him
+    gm.put(0, s["x"] + 64 * 32, s["y"])                     # walk up to him from the east
+    gm.frame(5)
+    vice.set_keys(gm.v, ["A"])
     on = 0
-    for _ in range(10):
+    for _ in range(80):
         gm.frame()                                          # (the display goes on)
         on = gm.v.mem_get(a("msg_on"), 1)[0]
         if on:
             break
+    vice.set_keys(gm.v, [])
+    talk = (gm.sprites()[0]["x"] - s["x"]) / 32             # he speaks before the bump
     gm.frame(2)
     px = g.frame(gm.v)
     box = {px(line, x) for line in range(254, 275) for x in range(100, 268)}
@@ -225,22 +254,36 @@ def wizard(gm):
         q = g.frame(gm.v)
         arrow.append(1 in {q(line, x) for line in range(264, 272) for x in range(268, 284)})
     blinks = True in arrow and False in arrow
-    r = on == 1 and 1 in box and len(window) > 2 and junk == {0} and blinks
-    print(("ok   " if r else "FAIL ") + f"touching the wizard: the game pauses with his message in a box under "
-          f"the play window (shown {on == 1}, white text {1 in box}, map still shown {len(window) > 2}, "
-          f"clean below the text {junk == {0}}, arrow blinking {blinks})")
+    r = on == 1 and 1 in box and len(window) > 2 and junk == {0} and blinks and 33 <= talk <= 40
+    print(("ok   " if r else "FAIL ") + f"walking up to the wizard: the game pauses with his message in a box "
+          f"under the play window {talk:.1f} px from him (shown {on == 1}, white text {1 in box}, map still "
+          f"shown {len(window) > 2}, clean below the text {junk == {0}}, arrow blinking {blinks})")
     ok &= r
     vice.set_keys(gm.v, ["J"])
     gm.frame(5)
     vice.set_keys(gm.v, [])
-    gm.frame(30)
+    for _ in range(5):
+        gm.frame()
+        if gm.v.mem_get(a("item_spin"), 1)[0]:
+            break
+    sw = gm.v.mem_get(a("sword_anim"), 27)
+    spun, text = spin_check(gm, [sw[1 + 3 * d] for d in range(1, 9)])
     has = gm.v.mem_get(a("has_sword"), 1)[0]
-    gone = gm.find(k) is None and gm.spawn_state(k) == 2
+    stays = gm.find(k) is not None and gm.spawn_state(k) != 2
     sword_gone = not any(t["controller"] == SWORDI for t in gm.sprites())
     off = gm.v.mem_get(a("msg_on"), 1)[0] == 0
-    r = has == 1 and gone and sword_gone and off
-    print(("ok   " if r else "FAIL ") + f"after J: box gone ({off}), player has the sword ({has}), wizard "
-          f"gone ({gone}), sword off the ground ({sword_gone})")
+    gm.frame(30)                                            # no second message
+    again = gm.v.mem_get(a("msg_on"), 1)[0] == 0
+    vice.set_keys(gm.v, ["A"])                              # and he is in the way
+    gm.frame(60)
+    vice.set_keys(gm.v, [])
+    gap = (gm.sprites()[0]["x"] - gm.find(k)["x"]) / 32 if gm.find(k) else 0
+    solid = 30 <= gap <= 34
+    ok &= solid
+    print(("ok   " if solid else "FAIL ") + f"the wizard is in the way: walking west into him stops {gap:.1f} px off")
+    r = has == 1 and stays and sword_gone and off and spun and again
+    print(("ok   " if r else "FAIL ") + f"after J: box gone ({off}), player has the sword ({has}), sword off "
+          f"the ground ({sword_gone}), wizard stays ({stays}), no second message ({again}); {text}")
     ok &= r
     return ok
 
@@ -459,9 +502,11 @@ def items(gm):
             gm.frame()
         got = v.mem_get(a("has_key") + c, 1)[0]
         col = v.mem_get(a("ui_col") + 3 + c, 1)[0]
-        r = s is None and got == 1 and gm.spawn_state(k) == 2 and col == (2, 5, 14)[c]
+        which = v.mem_get(a("spin_item"), 1)[0] == 9 + c
+        spun, text = spin_check(gm, [v.mem_get(a(("keyr_anim", "keyg_anim", "keyb_anim")[c]) + 1, 1)[0]])
+        r = s is None and got == 1 and gm.spawn_state(k) == 2 and col == (2, 5, 14)[c] and which and spun
         print(("ok   " if r else "FAIL ") + f"{NAMES[typ]}: collected {got == 1}, gone for good "
-              f"{gm.spawn_state(k) == 2}, strip colour {col}")
+              f"{gm.spawn_state(k) == 2}, strip colour {col}; {text}")
         ok &= r
     return ok
 
@@ -482,6 +527,62 @@ def strip(gm):
     print(("ok   " if r else "FAIL ") + f"status strip drawn: {found}, black between it and "
           f"the window: {below == {0}}")
     return r
+
+
+def joystick(gm):
+    """port 2 (readkb, myvic2.s): pushing the stick presses W/S/A/D/J in the
+    keyboard table, so the player walks each way and swings the sword; with
+    the stick idle the keyboard still works"""
+    v, a = gm.v, vice.addr
+    ok = True
+    v.mem_set(a("debug_freeze_enemies"), [1])
+    v.mem_set(a("has_sword"), [1])
+    s0 = gm.sprites()[0]
+    px, py = s0["gxhi"], s0["gyhi"]
+    spot = None                                     # open ground all around
+    for r in range(0, 120, 2):
+        for cx in range(px - r, px + r + 1, 2):
+            for cy in (py - r, py + r):
+                if all(gm.walkable(cx + dx, cy + dy) for dx in range(-12, 14, 2) for dy in range(-12, 14, 2)):
+                    spot = (cx, cy)
+                    break
+            if spot:
+                break
+        if spot:
+            break
+    kb = a("keyboard")
+    for name, bit, row, mask, dx, dy in (("up", 0, 1, 0x02, 0, -1), ("down", 1, 1, 0x20, 0, 1),
+                                         ("left", 2, 1, 0x04, -1, 0), ("right", 3, 2, 0x04, 1, 0)):
+        gm.put(0, spot[0] * 256, spot[1] * 256)
+        gm.frame(5)
+        v.mem_set(a("debug_joy"), [0xFF & ~(1 << bit)])
+        gm.frame(20)
+        key = v.mem_get(kb + row, 1)[0] & mask == 0
+        s0 = gm.sprites()[0]
+        v.mem_set(a("debug_joy"), [0xFF])
+        mx, my = s0["x"] - spot[0] * 256, s0["y"] - spot[1] * 256
+        moved = mx * dx > 256 and abs(my) < 128 if dx else my * dy > 256 and abs(mx) < 128
+        r = key and moved
+        print(("ok   " if r else "FAIL ") + f"stick {name}: key pressed {key}, moved ({mx / 256:+.1f}, {my / 256:+.1f}) chars")
+        ok &= r
+    gm.frame(5)
+    v.mem_set(a("debug_joy"), [0xEF])                    # fire
+    gm.frame(3)
+    key = v.mem_get(kb + 4, 1)[0] & 4 == 0
+    swing = v.mem_get(a("player_sword"), 1)[0] == 0
+    v.mem_set(a("debug_joy"), [0xFF])
+    gm.frame(30)
+    vice.set_keys(v, ["D"])                               # stick idle: the keyboard
+    gm.frame(3)
+    kbd = v.mem_get(kb + 2, 1)[0] & 4 == 0
+    vice.set_keys(v, [])
+    gm.frame(5)
+    idle = all(b == 0xFF for b in v.mem_get(kb, 8))
+    v.mem_set(a("debug_freeze_enemies"), [0])
+    r = key and swing and kbd and idle
+    print(("ok   " if r else "FAIL ") + f"stick fire: J pressed {key}, sword out {swing}; "
+          f"keyboard D with the stick idle {kbd}; nothing pressed after {idle}")
+    return ok and r
 
 
 def gates(gm):
@@ -597,7 +698,8 @@ def main(argv):
         ok = True
         for name, fn in (("wizard", wizard), ("behaviour", behaviour), ("sword", sword),
                          ("hitbox", hitbox), ("contact", contact), ("health", health),
-                         ("items", items), ("strip", strip), ("gates", gates)):
+                         ("items", items), ("strip", strip), ("joystick", joystick),
+                         ("gates", gates)):
             if what in (name, "all"):
                 ok &= fn(gm)
     finally:

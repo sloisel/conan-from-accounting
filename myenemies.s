@@ -16,7 +16,7 @@
 //   cyclops   patrols; charges when the player lines up with it
 //   jelly     turns on the spot, sinks, resurfaces near the player
 //   wizard    friendly, near the start: hands over the sword (lying by
-//             him, T_SWORDI), then vanishes
+//             him, T_SWORDI), and stays
 //   princess  in her prison by the pond: opening it wins (mygates.s)
 
 .const T_BLOB = 4
@@ -29,6 +29,7 @@
 .const T_HEART = 18                    // a heart dropped by a monster (myui.s)
 .const T_KEY = 20                      // keys: 20 red, 22 green, 24 blue
 .const T_SWORDI = 26                   // the sword on the ground by the wizard
+.const WIZ_TALK = 40                   // px (both ways): the wizard speaks
 .const MAX_SPRITES = 16                // player, sword and up to 14 monsters alive
 .const INTANGIBLE = $80                // sprite_state bit: no hits, no contact
 .const DYING = $40                     // sprite_state bit: playing its death
@@ -377,7 +378,8 @@ en_pd:                          // no hits or contact: just the distance
 // Returns C = 1 if the monster is gone (the caller must just return).
 en_common:
     lda debug_freeze_enemies
-    ora cut_phase               // (the rescue: everyone keeps still)
+    ora cut_phase               // (the rescue, an item spin: everyone keeps still)
+    ora item_spin
     beq !+
     jsr control_coords
     sec
@@ -562,6 +564,7 @@ ed_show:
 spawn_update:
     lda debug_freeze_enemies
     ora cut_phase
+    ora item_spin
     bne su_end
     lda spawn_grace
     beq !+
@@ -1053,20 +1056,19 @@ control_wiz:
     jsr en_finish
     lda has_sword
     bne wz_done
-    lda en_ax
-    cmp #16
-    bcs wz_done
+    lda en_ax                   // he speaks as the player walks up: his tile
+    cmp #WIZ_TALK               // is solid (tools/map_extras.py), the player
+    bcs wz_done                 // stops 16-32 px from him
     lda en_ay
-    cmp #18
+    cmp #WIZ_TALK
     bcs wz_done
+    lda #MSG_WIZARD
     jsr show_message            // "it's dangerous to go alone..."
-    lda #1
+    lda #1                      // the sword leaves the ground (control_swordi)
     sta has_sword
-    ldx control_index           // and off he goes
-    ldy sprite_data_2+sprite_spawn,x
-    lda #2
-    sta spawn_state,y
-    jsr sprite_free
+    lda #0                      // and Conan shows it off
+    jsr start_spin
+    ldx control_index
 wz_done:
     rts
 
@@ -1111,11 +1113,13 @@ cp_walk:                        // the rescue: out through the open gate
     sta sprite_data_2+sprite_global_xhi,x
     jmp en_finish
 
-// ---- the wizard's message ----------------------------------------------
-// The game stops where it is (the display, the sprites and the music go on)
-// and the message shows in a box in the open border under the play window
-// (myui.s: msg_sprites, from the bottom IRQ), until J or space.
+// ---- messages: the controls, the wizard's words --------------------------
+// show_message: A = message (MSG_*). The game stops where it is (the
+// display, the sprites and the music go on) and the message shows in a box
+// in the open border under the play window (myui.s: msg_sprites, from the
+// bottom IRQ), until J or space (or fire).
 show_message:
+    jsr msg_render
     ldx sprite2_count           // sprites reaching below the window would
 !:  dex                         // read the box's pictures for their last
     bmi !+                      // rows (AG_SAFE's pointers): parked for now

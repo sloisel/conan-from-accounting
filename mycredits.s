@@ -7,7 +7,8 @@
 // multiplexed down the screen (a raster IRQ before each re-places all 8
 // sprites), 10 band slots of sprite data ($4000-$53ff) are reused as the text
 // scrolls, one text line rendered per frame from a bold copy of the ROM
-// font. First the picture is shown as it is for a moment, then it fades two
+// font (from its RAM copy at MSG_FONT). The music plays from a raster IRQ
+// throughout, also while the picture is copied (the screen blank then). First the picture is shown as it is for a moment, then it fades two
 // steps darker (colours only: screen and colour RAM, the background) so the
 // white text reads well over it.
 // This code and its data live above $8000 (segment CREDITS, the text in
@@ -135,6 +136,7 @@ credits:
     sta cr_save1
     lda #$35                    // RAM at $a000, I/O
     sta $01
+    jsr cr_music_on             // the music goes on meanwhile, screen blank
     ldx #0                      // the picture: bitmap $a000 -> $6000
 !:  .for (var p = 0; p < 32; p++) {
     lda $a000 + p * $100,x
@@ -163,22 +165,18 @@ credits:
     inx
     beq !+
     jmp !-
-!:  lda #$33                    // the ROM font (character ROM at $d000),
-    sta $01                     // bold: each glyph ORed with itself a pixel
-!:  lda $d000,x                 // to the right
-    sta cr_lo
-    lsr
+!:  lda MSG_FONT,x              // the ROM font (its RAM copy, myui.s),
+    sta cr_lo                   // bold: each glyph ORed with itself a pixel
+    lsr                         // to the right
     ora cr_lo
     sta CR_FONT,x
-    lda $d100,x
+    lda MSG_FONT+$100,x
     sta cr_lo
     lsr
     ora cr_lo
     sta CR_FONT+$100,x
     inx
     bne !-
-    lda #$35
-    sta $01
     lda $dd00                   // VIC bank 1
     and #%11111100
     ora #%00000010
@@ -218,11 +216,12 @@ credits:
     cmp #2 * CR_SLOTS
     bcc !-
     jsr cr_build
-    lda #<cr_irq_top
-    sta $fffe
-    lda #>cr_irq_top
+    sei                         // the music IRQ off: the credits' own on,
+    lda #<cr_irq_bot            // from the bottom one (line 254, the music:
+    sta $fffe                   // like the music IRQ's, so no frame without)
+    lda #>cr_irq_bot
     sta $ffff
-    lda #CR_IRQ_TOP
+    lda #CR_IRQ_BOT
     sta $d012
     lda #1
     sta $d01a
@@ -236,7 +235,6 @@ cr_loop:
     jsr cr_dim
     jsr cr_scroll
     jsr cr_build
-    jsr sidplay
     lda cr_rend                 // the next text line, once its slot is free
     lsr
     cmp #CR_BANDS
@@ -547,7 +545,15 @@ cri_out:
     tax
     pla
     rti
+cr_code_end:
+.segment TABLES
+// cr_irq_bot: line 254, after the last band: the music (here, not in the
+// main loop: on time whatever the loop is busy with), the next frame
 cr_irq_bot:
+    pha
+    txa
+    pha
+    tya
     pha
     lda #1
     sta cr_frame
@@ -558,8 +564,42 @@ cr_irq_bot:
     lda #>cr_irq_top
     sta $ffff
     asl $d019
+cr_music_irq:
+    jsr sidplay
+    pla
+    tay
+    pla
+    tax
     pla
     rti
-cr_code_end:
+
+// cr_music_on: while the picture and the font are copied (several frames):
+// the screen blank, a raster IRQ once a frame plays the music
+cr_music_on:
+    lda #$0b                    // screen off (the game's display is gone)
+    sta $d011
+    lda #0
+    sta $d020
+    lda #CR_IRQ_BOT
+    sta $d012
+    lda #<cr_irq_music
+    sta $fffe
+    lda #>cr_irq_music
+    sta $ffff
+    lda #1
+    sta $d01a
+    lda #$ff
+    sta $d019
+    cli
+    rts
+cr_irq_music:
+    pha
+    txa
+    pha
+    tya
+    pha
+    asl $d019
+    jmp cr_music_irq
+.segment CREDITS
 .assert "credits code above the picture's new place ($4000-$7fff)", credits >= $8000, true
 .assert "credits code below the title screen ($8c00)", cr_code_end <= $8c00, true

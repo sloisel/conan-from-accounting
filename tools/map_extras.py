@@ -88,8 +88,9 @@ GATES = [[(48, 58, GRASS), (49, 58, GRASS)], [(40, 4, GRASS)], [(7, 7, T_JAIL_OP
 
 def apply(charset, tilechars, tilecols, tiletags, mapdata):
     """add the chars and tiles, edit the map. charset: list of bytes (grown to
-    256 chars); tilechars: list of 16-char lists per tile; tilecols, tiletags:
-    per tile; mapdata: 64*64 tile numbers. All modified in place."""
+    256 chars); tilechars: list of 16-char lists per tile; tilecols: per tile,
+    a colour or a list of 16 (one per char, row by row); tiletags: per tile;
+    mapdata: 64*64 tile numbers. All modified in place."""
     charset.extend([0] * (2048 - len(charset)))
     free = iter(FREE_CHARS)
     codes = {}
@@ -141,14 +142,32 @@ def apply(charset, tilechars, tilecols, tiletags, mapdata):
     return codes
 
 
+START = (2, 61)                 # the player's start tile
+MARKER = 0x04                   # tile tag of the map editor's "1" markers
+
+
+def wizard_spot(mapdata, tiletags):
+    """the old wizard's tile: the marker farthest up the start pocket"""
+    markers = [(x, y) for y in range(64) for x in range(64) if tiletags[mapdata[y * 64 + x]] == MARKER]
+    return max(markers, key=lambda p: (p[0] - START[0]) ** 2 + (p[1] - START[1]) ** 2)
+
+
+def solid(mapdata, tiletags):
+    """the tiles nobody walks through: blocked tiles, and the wizard's (he
+    stands there for good, so he is in the way like a rock)"""
+    wiz = wizard_spot(mapdata, tiletags)
+    return [[tiletags[mapdata[j * 64 + k]] == BLOCKED or (k, j) == wiz for k in range(64)] for j in range(64)]
+
+
 def pathing(mapdata, tiletags):
-    """128x128 bits, as convert.py: a blocked tile blocks the half-tile cells
+    """128x128 bits, as convert.py: a solid tile blocks the half-tile cells
     2t..2t+2 in both directions. Returns a list of 2048 bytes (16 per row,
     bit k%8 of byte k//8 = column k)."""
     grid = [[0] * 129 for _ in range(129)]
+    sol = solid(mapdata, tiletags)
     for j in range(64):
         for k in range(64):
-            if tiletags[mapdata[j * 64 + k]] != BLOCKED:
+            if not sol[j][k]:
                 continue
             for x in range(2 * j, 2 * j + 3):
                 for y in range(2 * k, 2 * k + 3):

@@ -340,9 +340,9 @@ pathing:
 .byte $7,$0,$0,$0,$c0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0
 .byte $7,$0,$f0,$1f,$c0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0
 .byte $7,$0,$f0,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0
-.byte $7,$1c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
-.byte $7,$1c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
-.byte $7,$1c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
+.byte $7,$7c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
+.byte $7,$7c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
+.byte $7,$7c,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$71,$1c,$c7,$f1
 .byte $7,$0,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0
 .byte $7,$0,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0
 .byte $7,$0,$fc,$1f,$0,$ff,$ff,$ff,$ff,$ff,$ff,$ff,$1,$0,$0,$c0

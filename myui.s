@@ -81,7 +81,7 @@ ui_init:
 !:  sta UI_BLANK_BLK * 64,x     // border) and the idle byte $3fff
     dex
     bpl !-
-    jsr msg_render              // the wizard's message box
+    jsr msg_font_init           // the message box's font
     // fall through
 // ui_update: the strip's colours from player_hp and has_key
 ui_update:
@@ -256,6 +256,11 @@ control_key:
     tay
     lda #1
     sta has_key,y
+    tya                                     // Conan shows it off
+    clc
+    adc #9
+    jsr start_spin
+    ldx control_index
     ldy sprite_data_2+sprite_spawn,x        // taken for good
     lda #2
     sta spawn_state,y
@@ -277,17 +282,22 @@ it_no:
     clc
     rts
 
-// ---- the message box (the wizard's words) -----------------------------------
+// ---- the message box (the controls at the start, the wizard's words) --------
 // Two lines of 21 chars in 7 hires sprites side by side, and a blinking
 // arrow (the 8th: J or space goes on), in the open border under the play
 // window: the bottom IRQ places them (msg_sprites) while msg_on; their
 // pointers are AG_SAFE's (the screen from line 246 on), set by show_message.
-// The text is drawn into 7 spare blocks of AG_ALT's middle at ag_init, from
-// the ROM font (rows 0..6 of each glyph, lines 10 rows apart).
+// show_message draws the text into 7 spare blocks of AG_ALT's middle, from
+// a RAM copy of the ROM font (rows 0..6 of each glyph, lines 10 rows apart).
 // (MSG_Y, MSG_X, MSG_PARK_Y: myagsp.s)
 .var msg_blk = List().add($31, $32, $33, $3a, $3b, $3c, $3d, $3e)
-.var msg_lines = List().add("IT'S DANGEROUS TO GO", "ALONE! TAKE THIS.")
+// the messages (show_message A = one of these): two lines each, centred
+.var msg_list = List().add(
+    List().add("WASD: WALK  J: SWORD", "OR JOYSTICK IN PORT 2"),     // MSG_CONTROLS
+    List().add("IT'S DANGEROUS TO GO", "ALONE! TAKE THIS."))         // MSG_WIZARD
 .const MSG_W = 21                       // chars a line (7 sprites)
+.const MSG_FONT = $f800                 // the ROM font's first 64 glyphs, in the
+                                        // RAM above the music (msg_font_init)
 .for (var i = 0; i < 8; i++) {
     .assert "message blocks in AG_ALT's middle, clear of the strip's and the clip's",
         msg_blk.get(i) * 64 >= AG_ALT + 39 && msg_blk.get(i) * 64 + 64 <= AG_ALT + 977
@@ -295,16 +305,19 @@ it_no:
 }
 .segment TABLES
 msg_on:     .byte 0
+debug_no_intro: .byte 0                 // tests: no controls box at the start
 msg_blocks: .fill 8, msg_blk.get(i)
 .encoding "screencode_upper"
 msg_text:
+.for (var m = 0; m < msg_list.size(); m++) {
 .for (var l = 0; l < 2; l++) {
-    .var t = msg_lines.get(l)
+    .var t = msg_list.get(m).get(l)
     .errorif t.size() > MSG_W, "message line too long: " + t
     .var p = floor((MSG_W - t.size()) / 2)
     .fill p, $20
     .text t
     .fill MSG_W - p - t.size(), $20
+}
 }
 .encoding "petscii_mixed"
 // char i of the text: where its rows go (block (i % MSG_W) / 3, byte
@@ -318,22 +331,55 @@ msg_dhi: .fill 2 * MSG_W, >msg_dest(i)
 // the arrow (8th block)
 msg_arrow: .byte %11111110, %01111100, %00111000, %00010000
 mr_i:    .byte 0
+mr_t:    .byte 0
 
-// msg_render: ag_init (interrupts off): the text into the 8 blocks
-msg_render:
-    ldx #62                     // the 8 blocks: empty (loader leftovers)
-    lda #0
-!:  .for (var i = 0; i < 8; i++) { sta msg_blk.get(i) * 64,x }
-    dex
-    bpl !-
+.segment CODE2
+// msg_font_init: ag_init (interrupts off): the font for msg_render
+msg_font_init:
     lda $01
     pha
     lda #$33                    // the character ROM at $d000
     sta $01
     ldx #0
+!:  lda $d000,x
+    sta MSG_FONT,x
+    lda $d100,x
+    sta MSG_FONT+$100,x
+    inx
+    bne !-
+    pla
+    sta $01
+    rts
+
+// msg_render: A = message: its text into the 8 blocks (any time: only
+// shown while msg_on)
+msg_render:
+    ldx #0                      // its text: msg_text + 2 * MSG_W * A
+!:  cmp #0
+    beq !+
+    pha
+    txa
+    clc
+    adc #2 * MSG_W
+    tax
+    pla
+    sec
+    sbc #1
+    jmp !-
+!:  stx mr_t
+    ldx #62                     // the 8 blocks: empty (loader leftovers,
+    lda #0                      // the last message)
+!:  .for (var i = 0; i < 8; i++) { sta msg_blk.get(i) * 64,x }
+    dex
+    bpl !-
+    ldx #0
 mr_loop:
     stx mr_i
-    lda msg_text,x              // its glyph: $d000 + 8 * code
+    txa
+    clc
+    adc mr_t
+    tay
+    lda msg_text,y              // its glyph: MSG_FONT + 8 * code
     sta temp
     lda #0
     asl temp
@@ -342,7 +388,7 @@ mr_loop:
     rol
     asl temp
     rol
-    ora #$d0
+    ora #>MSG_FONT
     sta temp+1
     lda msg_dlo,x
     sta temp2
@@ -358,13 +404,12 @@ mr_loop:
     inx
     cpx #2 * MSG_W
     bne mr_loop
-    pla
-    sta $01
-    .for (var r = 0; r < 4; r++) {  // the arrow: rows 12..15, at the left
-    lda msg_arrow + r
-    sta msg_blk.get(7) * 64 + (12 + r) * 3
+    .for (var r = 0; r < 4; r++) {  // the arrow: rows 12..15, a char clear
+    lda msg_arrow + r               // of a full line's end
+    sta msg_blk.get(7) * 64 + (12 + r) * 3 + 1
     }
     rts
+.segment TABLES
 
 .var msg_msb = 0
 .for (var k = 0; k < 8; k++) { .if (MSG_X + 24 * k >= 256) .eval msg_msb = msg_msb | (1 << k) }

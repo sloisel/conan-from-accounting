@@ -220,14 +220,40 @@ clip_blk_end:  .fill clipList.size(), 63      // bytes up to which it may be non
 // debug_keys: AND-mask applied to each keyboard matrix row. A cleared bit
 // is a "pressed" key. Written by tools/vice.py through the VICE monitor.
 debug_keys: .fill 8,$ff
+// debug_joy: the same for joystick port 2 (bits 0-4: up, down, left, right,
+// fire; a cleared bit is pushed)
+debug_joy: .byte $ff
+// jw_row1: keyboard row 1 with the stick's up/down/left (bits 0-2 of $dc00)
+// pressed as W/S/A
+jw_row1: .fill 8, $ff & ((i & 1) != 0 ? $ff : $fd) & ((i & 2) != 0 ? $ff : $df) & ((i & 4) != 0 ? $ff : $fb)
 .segment MAIN
 
+joy2: .byte $ff
+
+// readkb: the keyboard matrix into keyboard+0..7 (a cleared bit is a pressed
+// key), with a joystick in port 2 folded in: up/down/left/right/fire = W, S,
+// A, D, J. The stick shares port A with the keyboard's column lines, so while
+// it is pushed a scan would see phantom keys: then the keyboard is skipped
+// for that frame (all released) and only the stick counts.
 readkb:
          lda #%11111111  // CIA#1 port A = outputs 
          sta DDRA             
-
+         sta PRA         // no column selected: port A's pins are the stick
          lda #%00000000  // CIA#1 port B = inputs
          sta DDRB             
+         lda PRA
+         and debug_joy
+         ora #$e0
+         sta joy2
+         cmp #$ff
+         beq rk_scan
+         ldx #7          // stick in use: no keys
+         lda #$ff
+!:       sta keyboard,x
+         dex
+         bpl !-
+         jmp rk_joy
+rk_scan:
 	readkb_1(%11111110,0)
 	readkb_1(%11111101,1)
 	readkb_1(%11111011,2)
@@ -237,6 +263,28 @@ readkb:
 	readkb_1(%10111111,6)
 	readkb_1(%01111111,7)
 	rts
+.segment CODE2
+rk_joy:
+	lda joy2
+	and #7
+	tax
+	lda keyboard+1
+	and jw_row1,x
+	sta keyboard+1
+	lda joy2
+	and #$08         // right: D
+	bne !+
+	lda keyboard+2
+	and #$fb
+	sta keyboard+2
+!:	lda joy2
+	and #$10         // fire: J
+	bne !+
+	lda keyboard+4
+	and #$fb
+	sta keyboard+4
+!:	rts
+.segment MAIN
 
 
 

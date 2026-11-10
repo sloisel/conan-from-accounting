@@ -12,6 +12,7 @@ import monster_check
 import irq_audit
 import mux_check
 import border_check
+import music_check
 
 ROOT = vice.ROOT
 TOOL = os.path.join(ROOT, "tools", "vice.py")
@@ -37,8 +38,27 @@ def main():
     subprocess.run([TOOL, "start"], check=True)
     try:
         v = vice.Vice()
+        check(v.boot(intro=True), "game loads")
+        on = 0
+        for _ in range(100):                            # the controls box
+            v.frames(1)
+            on = v.mem_get(vice.addr("msg_on"), 1)[0]
+            if on:
+                break
+        v.frames(3)
+        px = game_check.frame(v)
+        text = {px(line, x) for line in range(254, 272) for x in range(100, 268)}
+        vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "controls.png"))
         num = v.checkpoint(vice.addr("forever"))
-        check(v.run_until_hit(num, 60), "game loads and reaches main loop")
+        early = v.run_until_hit(num, 2)                 # (waits for a key)
+        vice.set_keys(v, ["J"])
+        v.frames(5)
+        vice.set_keys(v, [])
+        num = v.checkpoint(vice.addr("forever"))
+        play = v.run_until_hit(num, 10)
+        check(on == 1 and 1 in text and not early and play,
+              f"at the start the controls box shows (shown {on == 1}, white text {1 in text}), "
+              f"the game waits ({not early}), J starts it ({play})")
         v.frames(5)
 
         n, f = sprites(v)
@@ -91,11 +111,21 @@ def main():
                          f"plan as modelled (rewrite timing): {len(fails)} bad {fails[:3]}")
         v.close()
 
+        # the ending: the music keeps time into the title picture and credits
+        subprocess.run([TOOL, "start"], check=True, capture_output=True)
+        v = vice.Vice()
+        v.boot()
+        gaps = music_check.ending(v, 400)
+        late = [round(g, 2) for g in gaps if g > 1.05]
+        check(len(gaps) == 400 and not late,
+              f"the ending: the music plays every frame through the switch to the title picture, "
+              f"the hold and the fade ({len(gaps)} calls, max gap {max(gaps):.2f} frames, late {late[:5]})")
+        v.close()
+
         # multiplexer with a crowd of live monsters, in a fresh game
         subprocess.run([TOOL, "start"], check=True, capture_output=True)
         v = vice.Vice()
-        num = v.checkpoint(vice.addr("forever"))
-        v.run_until_hit(num, 60)
+        v.boot()
         bad, irq, lo, hi, upd, spare = mux_check.live(v, verbose=False)
         check(bad == 0 and not irq and lo >= 10,
               f"multiplexer, live crowd: {lo}..{hi} sprites, {bad} bad frames, "
@@ -115,8 +145,7 @@ def main():
         # gameplay, in a fresh game (the checks above froze the monsters)
         subprocess.run([TOOL, "start"], check=True, capture_output=True)
         v = vice.Vice()
-        num = v.checkpoint(vice.addr("forever"))
-        v.run_until_hit(num, 60)
+        v.boot()
         gm = monster_check.Game(v)
         gm.go_near(monster_check.JELLY, 8, dx=4)        # a busy scene (7 sprites)
         gm.frame(30)
@@ -127,6 +156,7 @@ def main():
                          ("contact", monster_check.contact),
                          ("health", monster_check.health), ("items", monster_check.items),
                          ("strip", monster_check.strip),
+                         ("joystick", monster_check.joystick),
                          ("gates", monster_check.gates)):
             check(fn(gm), f"monsters: {name} checks")
         v.close()

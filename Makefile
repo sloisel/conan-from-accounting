@@ -23,9 +23,10 @@ uigfx.s: tools/gen_ui.py
 mygame.d64: Makefile KickAss.cfg $(asm)
 	java -jar KickAss.jar mygame.s
 
-# play it: normal window, sound, real speed
+# play it: normal window, sound, real speed; a joystick in port 2 on the
+# cursor keys, space = fire (vice-joystick.cfg, on top of your own settings)
 run: mygame.d64
-	x64sc -autostart mygame.d64
+	x64sc -addconfig "$(CURDIR)/vice-joystick.cfg" -autostart mygame.d64
 
 # automated smoke test: VICE in the background at warp speed, no focus steal
 test: mygame.d64

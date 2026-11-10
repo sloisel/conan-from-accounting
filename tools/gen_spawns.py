@@ -34,7 +34,7 @@ NAMES = {BLOB: "blob", SKEL: "skeleton", GHOST: "ghost", CYCL: "cyclops",
 # west meadow (the princess's jail)
 KEYS = [("south of the graveyard", KEYR), ("north-east forest", KEYG), ("west meadow", KEYB)]
 
-START = (2, 61)                # player start tile
+START = mx.START                # player start tile
 
 
 def load():
@@ -67,8 +67,8 @@ def main():
 
     # the map editor's "1" markers: the one farthest up the start pocket is
     # the old wizard (you run past the other markers' blobs to reach him)
-    markers = [(x, y) for y in range(64) for x in range(64) if tag[mp[y * 64 + x]] == 0x04]
-    wizard = max(markers, key=lambda p: (p[0] - START[0]) ** 2 + (p[1] - START[1]) ** 2)
+    markers = [(x, y) for y in range(64) for x in range(64) if tag[mp[y * 64 + x]] == mx.MARKER]
+    wizard = mx.wizard_spot(mp, tag)               # (his tile is solid: map_extras)
     for x, y in markers:
         spawns.append((x, y, WIZ, "start: wizard") if (x, y) == wizard else (x, y, BLOB, "marker"))
     wx, wy = wizard                                # the sword lies next to him

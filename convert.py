@@ -39,11 +39,11 @@ with open('ultimate.asm') as f:
     chartilesettag = np.array([fmt(v) for v in tags_i])
     mapdata = np.array([fmt(v) for v in map_i])
     chartileset = np.array([fmt(v) for t in tc_i for v in t])
-    chartilesetcolor = np.array([fmt(v) for v in col_i])
+    chartilesetcolor = [v if isinstance(v, list) else [v] * 16 for v in col_i]   # per char
+    sol = map_extras.solid(map_i, tags_i)     # blocked tiles and the wizard's
     for j in range(64):
         for k in range(64):
-            uu = int(mapdata[j*64+k][1:],16)
-            if chartilesettag[uu] != "$ff":
+            if not sol[j][k]:
                 continue
             for x in range(2*j,2*j+3):
                 for y in range(2*k,2*k+3):
@@ -65,7 +65,7 @@ with open('ultimate.asm') as f:
     for j in range(16):
         for k in range(ntiles):
             z[j,k] = chartileset[k*16+j]
-            col[j,k] = chartilesetcolor[k]
+            col[j,k] = fmt(chartilesetcolor[k][j])
     for j in range(len(colr)):
         print(".var ",colr[j])
     print(".var numtiles=",m)

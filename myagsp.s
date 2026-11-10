@@ -55,6 +55,8 @@
 .const MSG_Y        = 253               // message box (myui.s): sprite y, lines 254..274
 .const MSG_X        = 100               //   168 px of text (and the arrow), centred
 .const MSG_PARK_Y   = 247 - 21          //   game sprites with y >= this reach line 247
+.const MSG_CONTROLS = 0                // show_message: which (myui.s msg_list)
+.const MSG_WIZARD = 1
 // the blank sprite block is $ff ($3fc0-$3fff, cleared at ag_init): as a
 // character code it is blank too, which matters because the hidden badline
 // at 247 may fetch AG_SAFE's sprite pointer bytes as characters (its row can

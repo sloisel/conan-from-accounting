@@ -82,7 +82,11 @@ player_index: index(player_list)
 		10,sp0+45,0,
 		10,sp0+46,0,
 		10,sp0+47,0,
-		10,sp0+48,0)
+		10,sp0+48,0,
+		// 9..11: a key held out (the item spin; keys red, green, blue)
+		255,UI_KEY_BLK,0,
+		255,UI_KEY_BLK+1,0,
+		255,UI_KEY_BLK+2,0)
 sword_anim: anim(sword_list)
 sword_index: index(sword_list)
 
@@ -93,6 +97,34 @@ animations: .word player_anim, sword_anim, blob_anim, skel_anim, ghost_anim, cyc
             .word heart_anim, keyr_anim, keyg_anim, keyb_anim, swordi_anim
 indices: .word player_index, sword_index, blob_index, skel_index, ghost_index, cycl_index, jelly_index, wiz_index, prin_index
          .word heart_index, keyr_index, keyg_index, keyb_index, swordi_index
+.segment MAIN
+
+// ---- the item spin: taking a key or the sword --------------------------------
+// Conan turns once in the thrust pose holding it out (8 directions, 4 frames
+// each, the same way round as his death), then faces the viewer holding it up
+// for a moment. No keys meanwhile (cut_input) and the monsters keep still
+// (en_common, spawn_update). The thing held is sprite 1: the sword (spin_item
+// 0) or a key (9..11: sword_list's key frames, at hand_x/y).
+.segment CODE2
+.const SPIN_STEP = 4
+.const SPIN_T = 8 * SPIN_STEP + 40
+.assert "SPIN_STEP is 4 (control_player divides by shifting)", SPIN_STEP, 4
+item_spin:  .byte 0             // frames left
+spin_item:  .byte 0
+spin_dirs:  .byte 1, 8, 7, 6, 5, 4, 3, 2, 1     // S, SW, W, NW, N, NE, E, SE, S
+// a key's sprite (its picture: 5 px wide, rows 11-20) held ~16 px out from
+// Conan's middle (1/32 px; directions as dir_x: -, S, SE, E, NE, N, NW, W, SW)
+.var hk = 16
+.var hd = 12
+hand_x: .word 0, 5*32, (5+hd)*32, (5+hk)*32, (5+hd)*32, 5*32, (5-hd)*32, (5-hk)*32, (5-hd)*32
+hand_y: .word 0, (hk-6)*32, (hd-6)*32, -6*32, (-hd-6)*32, (-hk-6)*32, (-hd-6)*32, -6*32, (hd-6)*32
+
+// start_spin: A = the item (0 sword, 9..11 key)
+start_spin:
+	sta spin_item
+	lda #SPIN_T
+	sta item_spin
+	rts
 .segment MAIN
 
 // camera: player shown at (160, 83) of the 304x166 AGSP window
@@ -346,6 +378,15 @@ control_sword:
 	lda player_dir_nz
 	asl
 	tax
+	lda item_spin            // holding a key out?
+	beq cs_sword
+	lda spin_item
+	beq cs_sword
+	add16 sprite_data_2+1+sprite_global_xlo:sprite_data_2+1+sprite_global_xhi:sprite_data_2+sprite_global_xlo:sprite_data_2+sprite_global_xhi:hand_x,x:hand_x+1,x
+	add16 sprite_data_2+1+sprite_global_ylo:sprite_data_2+1+sprite_global_yhi:sprite_data_2+sprite_global_ylo:sprite_data_2+sprite_global_yhi:hand_y,x:hand_y+1,x
+	ldx spin_item
+	jmp control_sword_stab
+cs_sword:
 	add16 sprite_data_2+1+sprite_global_xlo:sprite_data_2+1+sprite_global_xhi:sprite_data_2+sprite_global_xlo:sprite_data_2+sprite_global_xhi:sword_x,x:sword_x+1,x
 	add16 sprite_data_2+1+sprite_global_ylo:sprite_data_2+1+sprite_global_yhi:sprite_data_2+sprite_global_ylo:sprite_data_2+sprite_global_yhi:sword_y,x:sword_y+1,x
 	ldx player_dir_nz
@@ -379,14 +420,49 @@ control_player:
 	beq !+
 	ldy player_index+PLAYER_DEATH_ANIM
 	cpy sprite_data_2+sprite_anim
-	beq control_player_end
+	beq cp_rts
 	sty sprite_data_2+sprite_anim
 	lda player_anim,y
 	sta sprite_data_2+sprite_delay
 	iny
 	sty sprite_data_2+sprite_frame
 	rts
+!:	lda item_spin            // taking an item: the spin
+	beq cp_nospin
+	dec item_spin
+	bne !+
+	ldy player_index+8       // done: standing, facing the viewer
+	sty sprite_data_2+sprite_anim
+	lda player_anim,y
+	sta sprite_data_2+sprite_delay
+	iny
+	sty sprite_data_2+sprite_frame
+	rts
+!:	lda #SPIN_T
+	sec
+	sbc item_spin
+	lsr                      // / SPIN_STEP
+	lsr
+	cmp #8
+	bcc !+
+	lda #8
+!:	tax
+	lda spin_dirs,x
+	sta player_dir_nz
+	tax
+	lda player_index+15,x    // the thrust pose that way
+	cmp sprite_data_2+sprite_anim
+	beq !+
+	sta sprite_data_2+sprite_anim
+	tay
+	lda player_anim,y
+	sta sprite_data_2+sprite_delay
+	iny
+	sty sprite_data_2+sprite_frame
 !:
+cp_rts:
+	rts
+cp_nospin:
 	lda sprite_data_2+sprite_anim // check to see if we're in the middle of sword stroke
 	cmp player_index+16
 	bcc control_player_normal

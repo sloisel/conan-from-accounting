@@ -174,6 +174,10 @@ main:
 	jsr clip_sprites
 	jsr mux_plan
 	jsr ag_init            // draw the ring, start the raster IRQs
+	lda debug_no_intro     // the controls, in the message box
+	bne forever
+	lda #MSG_CONTROLS
+	jsr show_message
 forever:
     jsr readkb
 	jsr cut_input          // the rescue: scripted keys (mygates.s)

@@ -176,7 +176,8 @@ cu_next:
 // bit 2; J = row 4 bit 2)
 cut_input:
     lda cut_phase
-    ora player_dying            // (dying: no keys either)
+    ora player_dying            // (dying, an item spin: no keys either)
+    ora item_spin
     bne !+
     rts
 !:  lda keyboard+1              // nothing pressed
