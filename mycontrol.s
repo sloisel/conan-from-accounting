@@ -54,7 +54,12 @@ cc_h:     .byte 0
 		8,sp0+24,0,
 		8,sp0+29,0,
 		8,sp0+34,0,
-		8,sp0+39,0)
+		8,sp0+39,0,
+		// 24: death: a full turn clockwise (down, down-left, left, ...),
+		// then flat on his back (myui.s, UI_DEAD_BLK)
+		4,sp0+0,4,sp0+35,4,sp0+30,4,sp0+25,4,sp0+20,4,sp0+15,4,sp0+10,4,sp0+5,
+		255,UI_DEAD_BLK,0)
+.const PLAYER_DEATH_ANIM = 24
 .macro anim(z) {
 	.for(var k=0;k<z.size();k++) {
 		.byte z.get(k)
@@ -344,12 +349,12 @@ control_sword:
 	add16 sprite_data_2+1+sprite_global_xlo:sprite_data_2+1+sprite_global_xhi:sprite_data_2+sprite_global_xlo:sprite_data_2+sprite_global_xhi:sword_x,x:sword_x+1,x
 	add16 sprite_data_2+1+sprite_global_ylo:sprite_data_2+1+sprite_global_yhi:sprite_data_2+sprite_global_ylo:sprite_data_2+sprite_global_yhi:sword_y,x:sword_y+1,x
 	ldx player_dir_nz
-//	lda player_sword
-//	beq control_sword_stab
+	lda player_dying         // dying: no sword
+	bne !+
 	lda sprite_data_2+sprite_anim // check to see if we're in the middle of sword stroke
 	cmp player_index+16
 	bcs control_sword_stab
-	ldx #0
+!:	ldx #0
 control_sword_stab:
 	ldy sword_index,x
 	sty sprite_data_2+1+sprite_anim
@@ -370,6 +375,18 @@ control_nop:
 
 control_player:
 	jsr control_player_keyboard
+	lda player_dying         // dying: the death animation, nothing else
+	beq !+
+	ldy player_index+PLAYER_DEATH_ANIM
+	cpy sprite_data_2+sprite_anim
+	beq control_player_end
+	sty sprite_data_2+sprite_anim
+	lda player_anim,y
+	sta sprite_data_2+sprite_delay
+	iny
+	sty sprite_data_2+sprite_frame
+	rts
+!:
 	lda sprite_data_2+sprite_anim // check to see if we're in the middle of sword stroke
 	cmp player_index+16
 	bcc control_player_normal

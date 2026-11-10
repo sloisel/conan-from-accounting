@@ -51,6 +51,7 @@
 .const UI_BLK       = $34               // blocks: heart, key x3
 .const UI_HEART_BLK = UI_BLK
 .const UI_KEY_BLK   = UI_BLK + 1        // + key 0..2 (same picture, own colour)
+.const UI_DEAD_BLK  = UI_BLK + 4        // Conan lying dead (mycontrol.s player_list)
 // the blank sprite block is $ff ($3fc0-$3fff, cleared at ag_init): as a
 // character code it is blank too, which matters because the hidden badline
 // at 247 may fetch AG_SAFE's sprite pointer bytes as characters (its row can
@@ -110,7 +111,6 @@ an_sl:    .byte 0
 an_t:     .byte 0
 .const AG_SW_AHEAD = 4  // pointer-row switch IRQ this many lines before its badline
                         // (IRQ entry under heavy sprite DMA: ~1.5 lines to ag_do_swap)
-an_kind:  .byte 0     // the scheduled event IRQ: 0 rewrite, 1 pointer-row switch
 n_gl:     .fill 8, 0  // raster lines on which sprites may read AG_ALT's slots
 n_gln:    .byte 0
 fr_n:     .byte 0
@@ -575,11 +575,16 @@ an_wdone:
     inx
     stx mx_i
     jmp an_mloop
-an_irq_mux:
-    lda #0
-    sta an_kind
+an_irq_mux:                 // X = entry: its hardware sprite's own IRQ
+    ldy mx_slot,x           // handler (mymux.s mx_irq_0..7)
+    lda mx_irq_lo,y
+    sta $fffe
+    lda mx_irq_hi,y
+    sta $ffff
     lda an_t
-    jmp an_irq
+    sta $d012
+    clc
+    rts
 an_nomux:
     lda an_sl
     cmp #255
@@ -598,9 +603,7 @@ an_nomux:
 !:  sec                     // (the caller does the bottom work)
     rts
 an_irq_sw:
-    ldx #1
-    stx an_kind
-an_irq:                     // A = line of the next event
+an_irq:                     // A = line of the next pointer-row switch
     sta $d012
     lda #<ag_irq_evt
     sta $fffe
@@ -651,18 +654,9 @@ ag_set_bottom:
     sta $d012
     rts
 
-// ---- event IRQ: multiplexer rewrite or pointer-row switch (B-4) ----
-ag_irq_evt:                 // a pointer-row switch or multiplexer rewrite is due
-    pha
-    txa
-    pha
-    tya
-    pha
-    lda an_kind             // straight to the work (it has a deadline; other
-    bne ae_swap             // sprites' DMA leaves ~44 cycles per line)
-    ldx mx_i                // a rewrite
-    MX_WRITE()
-ae_wdone:
+// ---- event IRQs: pointer-row switch (B-4) here; a multiplexer rewrite has
+// one handler per hardware sprite (mymux.s mx_irq_0..7), which ends here ----
+ae_wdone:                   // (a rewrite done: A, X, Y pushed)
     inc mx_i
 ae_next:
     asl $d019               // ack before scheduling the next IRQ
@@ -675,7 +669,13 @@ ae_next:
     pla
     rti
 
-ae_swap:                    // a pointer-row switch
+ag_irq_evt:                 // a pointer-row switch is due
+    pha
+    txa
+    pha
+    tya
+    pha
+ae_swap:
     ldx ag_swidx
     lda n_swB1,x
     jsr ag_do_swap

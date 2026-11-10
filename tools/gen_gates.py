@@ -3,7 +3,8 @@
 
 Per gate (= key colour: 0 red, 1 green, 2 blue): the box of player positions
 (in chars, the collision point's) that touch it, its map cells, and the
-collision bits that clear when it opens (the gate's tiles become grass).
+collision bits that clear when it opens (the gate's tiles become grass, or
+the jail's floor).
 
 Usage: python3 tools/gen_gates.py > gates.s
 """
@@ -32,10 +33,10 @@ def main():
     tiles, cells, starts_t, starts_p, box = [], [], [0], [0], []
     for gate in mx.GATES:
         m2 = list(mp)
-        for x, y in gate:
+        for x, y, t in gate:
             assert tag[mp[y * 64 + x]] == mx.BLOCKED
-            m2[y * 64 + x] = mx.GRASS
-            tiles.append(y * 64 + x)
+            m2[y * 64 + x] = t
+            tiles.append((y * 64 + x, t))
         opened = mx.pathing(m2, tag)
         for i, (a, b) in enumerate(zip(closed, opened)):
             if a != b:
@@ -43,7 +44,7 @@ def main():
                 cells.append((i, ~(a & ~b) & 0xFF))
         starts_t.append(len(tiles))
         starts_p.append(len(cells))
-        xs, ys = [x for x, _ in gate], [y for _, y in gate]
+        xs, ys = [x for x, _, _ in gate], [y for _, y, _ in gate]
         # a blocked tile t keeps the collision point out of chars 4t-1..4t+4
         box.append((4 * min(xs) - 2, 4 * max(xs) + 5, 4 * min(ys) - 2, 4 * max(ys) + 5, 4 * min(ys)))
     row = lambda name, vals: print(f"{name}: .byte " + ",".join(str(v) for v in vals))
@@ -51,12 +52,12 @@ def main():
     print("// locked gates (tools/map_extras.py): 0 red door, 1 green gate, 2 blue gate")
     print(".segment MAIN")
     print(f".const GATE_N = {len(mx.GATES)}")
-    print(f".const GATE_OPEN_TILE = {mx.GRASS}")
     for k, name in enumerate(("gate_bx0", "gate_bx1", "gate_by0", "gate_by1", "gate_row")):
         row(name, [b[k] for b in box])
     row("gate_t", starts_t)
-    print("gate_tile_lo: .byte " + ",".join(f"<(map+{o})" for o in tiles))
-    print("gate_tile_hi: .byte " + ",".join(f">(map+{o})" for o in tiles))
+    print("gate_tile_lo: .byte " + ",".join(f"<(map+{o})" for o, _ in tiles))
+    print("gate_tile_hi: .byte " + ",".join(f">(map+{o})" for o, _ in tiles))
+    row("gate_tile_new", [t for _, t in tiles])        # the tile it becomes
     row("gate_p", starts_p)
     print("gate_path_lo: .byte " + ",".join(f"<(pathing+{i})" for i, _ in cells))
     print("gate_path_hi: .byte " + ",".join(f">(pathing+{i})" for i, _ in cells))

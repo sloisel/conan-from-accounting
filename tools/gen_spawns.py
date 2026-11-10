@@ -30,7 +30,7 @@ NAMES = {BLOB: "blob", SKEL: "skeleton", GHOST: "ghost", CYCL: "cyclops",
          KEYR: "red key", KEYG: "green key", KEYB: "blue key"}
 # the keys open the way on (map_extras.py): red key south of the graveyard's
 # fence, green key in the north-east forest (bridge gate), blue key in the
-# west meadow (the princess's prison)
+# west meadow (the princess's jail)
 KEYS = [("south of the graveyard", KEYR), ("north-east forest", KEYG), ("west meadow", KEYB)]
 
 START = (2, 61)                # player start tile
@@ -71,7 +71,7 @@ def main():
     for x, y in markers:
         spawns.append((x, y, WIZ, "start: wizard") if (x, y) == wizard else (x, y, BLOB, "marker"))
 
-    # the princess in her prison by the pond
+    # the princess in her jail by the pond
     px, py = mx.PRINCESS
     assert walk(px, py)
     spawns.append((px, py, PRIN, "pond"))

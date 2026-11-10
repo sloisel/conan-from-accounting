@@ -6,7 +6,7 @@
   contact:   touching a monster knocks the player back (hurt timer, border)
   wizard:    no sword at first; touching the old wizard shows his message,
              J continues, the player has the sword and the wizard is gone
-  gates:     the locked gates open with their keys; the prison's starts
+  gates:     the locked gates open with their keys; the jail's starts
              the rescue, which ends on the title picture
 
   hitbox:    the sword hits exactly where the blade's pixels overlap a monster
@@ -362,14 +362,31 @@ def health(gm):
     r1 = t and hp == 2 and col == [2, 2, 11]
     v.mem_set(a("player_hp"), [1])
     t2 = touch()
+    # the last heart: a turn on the spot, lying dead, then back at the start
+    seen, frames, shot = [], 0, None
+    for frames in range(200):
+        gm.frame()
+        ptr = gm.sprites()[0]["pointer"]
+        if not seen or seen[-1] != ptr:
+            seen.append(ptr)
+            if ptr == 0x34 + 4:
+                shot = frames + 5
+        if frames == shot:
+            vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "dead.png"))
+        if not v.mem_get(a("player_dead"), 1)[0]:
+            break
+    spin = [128 + f for f in (0, 35, 30, 25, 20, 15, 10, 5)]
+    dead_blk = 0x34 + 4
+    died = dead_blk in seen and all(f in seen for f in spin) and frames > 100
     gm.frame(3)
     hp2 = v.mem_get(a("player_hp"), 1)[0]
     p = gm.sprites()[0]
     at_start = abs(p["x"] - 10 * 256) < 4 * 256 and abs(p["y"] - 245 * 256) < 4 * 256
     v.mem_set(a("debug_no_death"), [1])
-    r = r1 and t2 and hp2 == 3 and at_start
+    r = r1 and t2 and died and hp2 == 3 and at_start
     print(("ok   " if r else "FAIL ") + f"health: a touch costs a heart ({hp} left, strip {col}); "
-          f"the last one: back at the start ({at_start}) with {hp2} hearts")
+          f"the last one: death spin and lying frame ({died}, {frames} frames), then back at "
+          f"the start ({at_start}) with {hp2} hearts")
     return r
 
 
@@ -445,8 +462,9 @@ def strip(gm):
 def gates(gm):
     """the locked gates (mygates.s): shut without the key; with it, touching
     the gate opens it (map tiles grass, collision bits clear) and the player
-    walks through. The prison's gate starts the rescue: Conan steps aside,
-    the princess walks out, then the title picture (VIC bank 2, bitmap mode)."""
+    walks through. The jail's gate starts the rescue: Conan steps aside,
+    the princess walks out, then the title picture (VIC bank 1, bitmap mode)
+    with the credits scrolling up over it."""
     v, a = gm.v, vice.addr
     ok = True
     n = 3
@@ -459,10 +477,13 @@ def gates(gm):
     by0, by1 = v.mem_get(a("gate_by0"), n), v.mem_get(a("gate_by1"), n)
     v.mem_set(a("debug_freeze_enemies"), [1])           # (nobody in the way)
 
+    tn = v.mem_get(a("gate_tile_new"), t[n])                # what each gate tile becomes
+
     def state(c):
-        tiles = [v.mem_get(tl[i] | th[i] << 8, 1)[0] for i in range(t[c], t[c + 1])]
+        """(open, shut)"""
+        tiles = [v.mem_get(tl[i] | th[i] << 8, 1)[0] == tn[i] for i in range(t[c], t[c + 1])]
         bits = [v.mem_get(pl[i] | ph[i] << 8, 1)[0] & ~pm[i] & 0xFF for i in range(p[c], p[c + 1])]
-        return all(x == 1 for x in tiles) and not any(bits), not any(x == 1 for x in tiles) and all(bits)
+        return all(tiles) and not any(bits), not any(tiles) and all(bits)
 
     # where the player stands to touch each gate, and the way through
     spots = [((bx0[0] + bx1[0]) // 2, by1[0], ["W"], lambda x, y: y < by0[0]),        # red: from the south
@@ -518,12 +539,28 @@ def gates(gm):
         if ph == 3 and not shot:
             vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "rescue.png"))
             shot = True
-    regs = v.mem_get(0xD011, 1)[0], v.mem_get(0xDD00, 1)[0] & 3
-    won = bool(regs[0] & 0x20 and regs[1] == 1)
-    r = opened and shut and [q for q in phases if q][:3] == [1, 2, 3] and prin_x is not None and prin_x >= 4 * 8 + 2 and won
-    vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "victory.png"))
+            num = v.checkpoint(a("credits"))                # the pause, then the end
+            v.run_until_hit(num, 20)
+            break
+    # the title picture (moved to VIC bank 1), credits scrolling up over it
+    ys, stray = [], False
+    for _ in range(600):                                # (a hold, a fade, then the text)
+        num = v.checkpoint(a("cr_irq_bot"))
+        if not v.run_until_hit(num, 5):
+            break
+        ys.append(v.mem_get(a("cr_y0"), 1)[0])
+        if v.mem_get(a("cr_phase"), 1)[0] < 2:                 # picture alone: no sprites
+            stray |= v.mem_get(0xD015, 1)[0] != 0
+        if len(ys) == 580:
+            vice.do_shot(v, os.path.join(vice.ROOT, "screenshots", "credits.png"))
+    regs = v.mem_get(0xD011, 1)[0], v.mem_get(0xDD00, 1)[0] & 3, v.mem_get(0xD015, 1)[0]
+    won = bool(regs[0] & 0x20 and regs[1] == 2 and regs[2] == 0xFF)
+    rolling = len(ys) == 600 and sum(1 for p, q in zip(ys, ys[1:]) if q == p - 1) > 150
+    r = opened and shut and [q for q in phases if q][:3] == [1, 2, 3] and prin_x is not None \
+        and prin_x >= 4 * 8 + 2 and won and rolling and not stray
     print(("ok   " if r else "FAIL ") + f"{names[2]}: shut without its key {shut}, opens with it {opened}; "
-          f"rescue phases {phases}, princess out at char x {prin_x}, title picture {won}")
+          f"rescue phases {phases}, princess out at char x {prin_x}, title picture {won}, "
+          f"credits scrolling {rolling} ({len(ys)} frames), no stray sprites before {not stray}")
     return ok and r
 
 

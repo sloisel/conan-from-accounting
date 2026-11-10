@@ -32,6 +32,7 @@
 .const DYING = $40                     // sprite_state bit: playing its death
 .const KNOCK_END = 8                   // hit flash counts down from 16: pushed above this
 .const DEATH_FRAMES = 28
+.const DEATH_TIME = 8 * 4 + 90          // the player's: a turn, then lying there
 
 .segment TABLES
 // per type (index = type / 2)
@@ -444,6 +445,7 @@ en_touch:
     ldy #0                      // distance to the player: also kept for
     jsr en_dist                 // the behaviours (en_ax, en_ay, en_sx, en_sy)
     lda player_hurt
+    ora player_dying
     bne en_ok
     lda en_ax
     cmp #12
@@ -1204,9 +1206,16 @@ msg_key:
 // (main loop, once per frame)
 player_effects:
     lda player_dead
-    beq !+
+    beq pe_alive
+    lda player_dying
+    bne !+
+    lda #DEATH_TIME             // out of hearts: the death animation first
+    sta player_dying
+!:  dec player_dying
+    bne pe_alive
     jsr player_respawn          // (myui.s)
-!:  lda player_hurt
+pe_alive:
+    lda player_hurt
     beq !+
     dec player_hurt
     cmp #30
@@ -1218,7 +1227,7 @@ player_effects:
     sta $d020
     rts
 
-// victory: stop the game, show the title picture again with the music
+// victory: stop the game: the title picture with the credits (mycredits.s)
 victory:
     sei
     lda #0
@@ -1226,11 +1235,8 @@ victory:
     sta $d015
     lda #$ff
     sta $d019
-    jsr show_splash
-    ldx #<victory_irq
-    ldy #>victory_irq
-    jsr setup_irq
-!:  jmp !-
+    jmp credits
+// victory_irq: just the music (the wizard's message)
 victory_irq:
     pha
     txa

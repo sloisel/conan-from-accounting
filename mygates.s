@@ -3,11 +3,11 @@
 // Three gates bar the way (tools/map_extras.py draws them into the map,
 // gates.s says where they are): the red door in the graveyard's fence, the
 // green gate at the east end of the bridge, the blue gate of the princess's
-// prison. Touching a gate with its key opens it for good: its tiles become
-// grass in the map, its collision bits clear, and the rows of it on screen
+// jail. Touching a gate with its key opens it for good: its tiles become
+// grass (or the jail's floor) in the map, its collision bits clear, and the rows of it on screen
 // are redrawn (a frame's worth of CPU, once).
 //
-// Opening the prison starts the rescue: Conan steps aside (scripted keys),
+// Opening the jail starts the rescue: Conan steps aside (scripted keys),
 // the princess walks out through the gate (control_prin), a pause, then the
 // title picture (victory). Monsters keep still meanwhile (en_common).
 
@@ -65,7 +65,7 @@ gate_open_x:
     lda #1
     sta gate_open,x
     stx gt_g
-    ldy gate_t,x                // its tiles become grass
+    ldy gate_t,x                // its tiles become grass (or floor)
 go_tile:
     tya
     cmp gate_t+1,x
@@ -74,9 +74,9 @@ go_tile:
     sta temp
     lda gate_tile_hi,y
     sta temp+1
+    lda gate_tile_new,y
     sty gt_i
     ldy #0
-    lda #GATE_OPEN_TILE
     sta (temp),y
     ldy gt_i
     iny
@@ -135,7 +135,7 @@ gd_next:
     cmp #4
     bne gd_loop
     lda gt_g
-    cmp #2                      // the prison: the rescue begins
+    cmp #2                      // the jail: the rescue begins
     bne !+
     lda #1
     sta cut_phase
@@ -176,6 +176,7 @@ cu_next:
 // bit 2; J = row 4 bit 2)
 cut_input:
     lda cut_phase
+    ora player_dying            // (dying: no keys either)
     bne !+
     rts
 !:  lda keyboard+1              // nothing pressed
@@ -188,7 +189,9 @@ cut_input:
     ora #$04
     sta keyboard+4
     lda cut_phase
-    cmp #1
+    bne !+
+    rts
+!:  cmp #1
     beq ci_step
 ci_face:
     lda #CUT_DIR                // standing, looking at her

@@ -1,5 +1,5 @@
 """Additions to the CharPad map (ultimate.asm): the fence, the locked gates and
-the princess's prison. convert.py applies them when it writes ultimate.s;
+the princess's jail. convert.py applies them when it writes ultimate.s;
 gen_gates.py and gen_spawns.py use the same data.
 
   red:   a fence along the south edge of the graveyard (row 58), with a red
@@ -7,9 +7,9 @@ gen_gates.py and gen_spawns.py use the same data.
          corner of the meadow south of it
   green: a green gate at the east end of the bridge; its key is in the
          north-east forest
-  blue:  the princess's stone prison by the pond in the north-west, with a
-         blue gate on its east side; its key is by the lake shore at the
-         east end of the hedge (west meadow)
+  blue:  the princess's jail by the pond in the north-west (iron bars on a
+         stone floor), with a blue gate on its east side; its key is by the
+         lake shore at the east end of the hedge (west meadow)
 
 Characters are multicolour: 4 double-width pixels per row, 8 rows:
 'k' black (background), '.' grass (multicolour 1), 'g' grey (multicolour 2),
@@ -54,32 +54,36 @@ GATE_POST = (["kkkk", "kggg", "kggg", "kggg", "kggg", "kggg", "kggg", "kkkk"],
              ["kkkk", "gggk", "gggk", "gggk", "gggk", "gggk", "gggk", "kkkk"])
 GATE_BARS = (["kcck", "kcck", "kcck", "kccc", "kccc", "kcck", "kcck", "kcck"],
              ["kcck", "kcck", "kcck", "ccck", "ccck", "kcck", "kcck", "kcck"])
-
-
-def outline(base, top=False, right=False):
-    """a copy of an 8-byte multicolour char with a black edge"""
-    b = list(base)
-    if top:
-        b[0] = 0
-    if right:
-        b = [x & 0xFC for x in b]
-    return b
+# the jail: a wall of iron bars along the north (top rail, bars, bottom
+# rail), seen edge-on along the west (a post), flagstones inside, the blue
+# gate on the east
+JAIL = {
+    "top":   ["kkkk", "gggg", "gggg", "kkkk", ".kg.", ".kg.", ".kg.", ".kg."],
+    "bars":  [".kg."] * 8,
+    "foot":  [".kg.", ".kg.", ".kg.", ".kg.", "kkkk", "gggg", "gggg", "kkkk"],
+    "cap":   ["kkkk", "kggk", "kggk", "kggk", "kggk", "kggk", "kggk", "kggk"],
+    "post":  ["kggk"] * 8,
+    "floor": ["gggk", "gggk", "gggk", "kkkk", "gkgg", "gkgg", "gkgg", "kkkk"],
+    "shade": ["kkkk", "kkkk", "gggk", "kkkk", "gkgg", "gkgg", "gkgg", "kkkk"],
+}
 
 
 # ---- new tiles, placements, gates ---------------------------------------------
-T_FENCE, T_DOOR_L, T_DOOR_R, T_GATE_G, T_GATE_B, T_PRIS_NW, T_PRIS_N, T_PRIS_NE = range(55, 63)
-WALL_FILL, WALL_LEFT, WALL_TOP = 23, 24, 26          # the map's border stone
+# (tile numbers 37..54 are CharPad tiles the map does not use)
+(T_FENCE, T_DOOR_L, T_DOOR_R, T_GATE_G, T_GATE_B, T_JAIL_NW, T_JAIL_N, T_JAIL_NE, T_JAIL_W,
+ T_JAIL_FLOOR, T_JAIL_OPEN) = range(37, 48)
 
 KEY_SPOTS = {20: (62, 62), 22: (52, 2), 24: (22, 47)}    # red, green, blue key (tile x, y)
-PRINCESS = (6, 7)                                         # in her prison
+PRINCESS = (6, 7)                                         # in her jail
 
 EDITS = ([(x, 58, T_FENCE) for x in range(50, 63)]
          + [(48, 58, T_DOOR_L), (49, 58, T_DOOR_R), (40, 4, T_GATE_G),
-            (5, 6, T_PRIS_NW), (6, 6, T_PRIS_N), (7, 6, T_PRIS_NE), (5, 7, WALL_LEFT),
-            (7, 7, T_GATE_B)])
+            (5, 6, T_JAIL_NW), (6, 6, T_JAIL_N), (7, 6, T_JAIL_NE), (5, 7, T_JAIL_W),
+            (6, 7, T_JAIL_FLOOR), (7, 7, T_GATE_B)])
 
-# key colour index (0 red, 1 green, 2 blue) -> tiles that open (become grass)
-GATES = [[(48, 58), (49, 58)], [(40, 4)], [(7, 7)]]
+# key colour index (0 red, 1 green, 2 blue) -> its tiles and what each
+# becomes when it opens (grass; the jail's floor reaches into its gate's tile)
+GATES = [[(48, 58, GRASS), (49, 58, GRASS)], [(40, 4, GRASS)], [(7, 7, T_JAIL_OPEN)]]
 
 
 def apply(charset, tilechars, tilecols, tiletags, mapdata):
@@ -101,7 +105,6 @@ def apply(charset, tilechars, tilecols, tiletags, mapdata):
                       ("gpost", GATE_POST), ("gbars", GATE_BARS)):
         new(name + "0", char(pic[0]))
         new(name + "1", char(pic[1]))
-    old = lambda c: charset[c * 8:c * 8 + 8]
     g = tilechars[GRASS][0]
 
     def tile(t, chars, col, tag):
@@ -119,31 +122,19 @@ def apply(charset, tilechars, tilecols, tiletags, mapdata):
     gp = [g, codes["gpost0"], codes["gpost1"], g]          # middle of the tile: the
     gb = [g, codes["gbars0"], codes["gbars1"], g]          # player stops right at it
     tile(T_GATE_G, gp + gb + gb + gp, 8 + 5, BLOCKED)
-    tile(T_GATE_B, gp + gb + gb + gp, 8 + 6, BLOCKED)
+    j = {k: new("jail_" + k, char(v)) for k, v in JAIL.items()}
+    t, b, f, cp, p = j["top"], j["bars"], j["foot"], j["cap"], j["post"]
+    fl, sh = j["floor"], j["shade"]
+    tile(T_JAIL_NW, [g] * 4 + [g, g, g, cp] + [g, g, g, p] + [g, g, g, p], 8, BLOCKED)
+    tile(T_JAIL_N, [g] * 4 + [t] * 4 + [b] * 4 + [f] * 4, 8, BLOCKED)
+    tile(T_JAIL_NE, [g] * 4 + [t, t, cp, g] + [b, b, p, g] + [f, f, p, g], 8, BLOCKED)
+    tile(T_JAIL_W, [g, g, g, p] * 4, 8, BLOCKED)
+    tile(T_JAIL_FLOOR, [sh] * 4 + [fl] * 12, 8, WALK)
+    tile(T_JAIL_OPEN, [sh, g, g, g] + [fl, g, g, g] * 3, 8, WALK)
+    tile(T_GATE_B, [sh] + gp[1:] + ([fl] + gb[1:]) * 2 + [fl] + gp[1:], 8 + 6, BLOCKED)
 
-    # the prison: the border's stone, with a black edge where it meets grass
-    variants = {}
-
-    def edged(c, top, right):
-        k = (c, top, right)
-        if k not in variants:
-            variants[k] = new(f"edge{c:02x}{int(top)}{int(right)}", outline(old(c), top, right))
-        return variants[k]
-
-    def prison(t, src, top=False, right=False):
-        ch = list(tilechars[src])
-        for i in range(16):
-            r, cc = divmod(i, 4)
-            if (top and r == 0) or (right and cc == 3):
-                ch[i] = edged(ch[i], top and r == 0, right and cc == 3)
-        tile(t, ch, tilecols[src], BLOCKED)
-
-    prison(T_PRIS_NW, WALL_FILL, top=True)
-    prison(T_PRIS_N, WALL_TOP, top=True)
-    prison(T_PRIS_NE, WALL_TOP, top=True, right=True)
-
-    for tiles in GATES:                     # (open gates become grass again)
-        assert all(mapdata[y * 64 + x] == GRASS for x, y in tiles)
+    for tiles in GATES:                     # (gates stand on grass)
+        assert all(mapdata[y * 64 + x] == GRASS for x, y, _ in tiles)
     for x, y, t in EDITS:
         assert tiletags[mapdata[y * 64 + x]] != BLOCKED, (x, y)
         mapdata[y * 64 + x] = t

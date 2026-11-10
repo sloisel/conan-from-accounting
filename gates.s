@@ -2,7 +2,6 @@
 // locked gates (tools/map_extras.py): 0 red door, 1 green gate, 2 blue gate
 .segment MAIN
 .const GATE_N = 3
-.const GATE_OPEN_TILE = 1
 gate_bx0: .byte 190,158,26
 gate_bx1: .byte 201,165,33
 gate_by0: .byte 230,14,26
@@ -11,6 +10,7 @@ gate_row: .byte 232,16,28
 gate_t: .byte 0,2,3,4
 gate_tile_lo: .byte <(map+3760),<(map+3761),<(map+296),<(map+455)
 gate_tile_hi: .byte >(map+3760),>(map+3761),>(map+296),>(map+455)
+gate_tile_new: .byte 1,1,1,47
 gate_p: .byte 0,3,6,8
 gate_path_lo: .byte <(pathing+1868),<(pathing+1884),<(pathing+1900),<(pathing+138),<(pathing+154),<(pathing+170),<(pathing+241),<(pathing+242)
 gate_path_hi: .byte >(pathing+1868),>(pathing+1884),>(pathing+1900),>(pathing+138),>(pathing+154),>(pathing+170),>(pathing+241),>(pathing+242)

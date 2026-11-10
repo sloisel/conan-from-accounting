@@ -342,6 +342,38 @@ mx_apply_top:
     sta $d015
     rts
 
+// mx_irq_0..7: the IRQ of a multiplexer rewrite, one copy per hardware
+// sprite (an_irq_mux points the vector at the one for the entry's sprite):
+// no register offsets to load, plain absolute stores, Y saved only after the
+// writes. Y lands 16 cycles sooner than with MX_WRITE, the whole IRQ is ~15
+// cycles shorter. Ends in ag_irq's common tail (ae_wdone). In TABLES: there
+// is room there.
+.var mx_irq_addr = List()
+.segment TABLES
+.for (var k = 0; k < 8; k++) {
+    .eval mx_irq_addr.add(*)
+    pha
+    txa
+    pha
+    ldx mx_i
+    lda mx_y,x
+    sta $d001 + 2 * k
+    lda mx_xlo,x
+    sta $d000 + 2 * k
+    lda mx_ptr,x
+    sta AG_SCREEN + $3f8 + k
+    lda mx_col,x
+    sta $d027 + k
+    lda mx_d010,x
+    sta $d010
+    tya
+    pha
+    jmp ae_wdone
+}
+mx_irq_lo: .fill 8, <mx_irq_addr.get(i)
+mx_irq_hi: .fill 8, >mx_irq_addr.get(i)
+.segment MAIN
+
 // MX_WRITE: X = plan entry: rewrite its hardware sprite during the frame
 // (y first: it has the earliest deadline). Clobbers A, Y. 52 cycles.
 .macro MX_WRITE() {

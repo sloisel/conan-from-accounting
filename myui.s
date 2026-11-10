@@ -18,7 +18,7 @@
 .var key_colors = List().add(2, 5, 14)  // red, green, light blue
 .var ui_x = List().add(32, 48, 64, 284, 298, 312)
 .assert "status strip pictures clear of AG_ALT's mirrored slots",
-        UI_BLK * 64 >= AG_ALT + 39 && (UI_BLK + 4) * 64 <= AG_ALT + 977, true
+        UI_BLK * 64 >= AG_ALT + 39 && (UI_DEAD_BLK + 1) * 64 <= AG_ALT + 977, true
 .assert "blank sprite block = glyphs $f8..$ff (above the map's)", UI_BLANK_BLK * 64, charsetaddr + $7c0
 
 // colour of a sprite by its pointer (exec_animations)
@@ -26,6 +26,7 @@
     .if (i >= sp0 && i < sp0 + spritecolor_list.size()) .return spritecolor_list.get(i - sp0)
     .if (i == UI_HEART_BLK) .return 2
     .if (i >= UI_KEY_BLK && i < UI_KEY_BLK + 3) .return key_colors.get(i - UI_KEY_BLK)
+    .if (i == UI_DEAD_BLK) .return spritecolor_list.get(0)
     .return 0
 }
 
@@ -54,18 +55,19 @@ player_hp:      .byte PLAYER_HP
 has_key:        .fill 3, 0
 ui_col:         .fill 6, UI_DIM          // colours of the strip's 6 sprites
 player_dead:    .byte 0
+player_dying:   .byte 0                  // frames of the death animation left
 debug_no_death: .byte 0                  // tests: health stops at 1
 .segment MAIN
 
 // ui_init: ag_init: pictures, pointer screens, colours
 ui_init:
     ldx #0
-!:  lda ui_gfx,x                // 4 blocks
+!:  lda ui_gfx,x                // 5 blocks
     sta UI_BLK * 64,x
-    lda ui_gfx+128,x
-    sta UI_BLK * 64 + 128,x
+    lda ui_gfx+160,x
+    sta UI_BLK * 64 + 160,x
     inx
-    cpx #128
+    cpx #160
     bne !-
     ldx #7
 !:  lda #UI_BLANK_BLK           // AG_SAFE: game sprites going on below the
@@ -146,12 +148,22 @@ pd_dead:
     sta player_dead
     jmp ui_update
 
-// player_respawn: out of hearts: back at the start, hearts full (keys and
-// the sword are kept; the monsters stay where they are)
+// player_respawn: out of hearts (after the death animation): back at the
+// start, hearts full (keys and the sword are kept; the monsters stay where
+// they are)
 player_respawn:
     lda #0
     sta player_dead
+    sta player_dying
     sta player_hurt
+    ldx #1                      // standing, facing down
+    lda player_index+7,x
+    tay
+    sta sprite_data_2+sprite_anim
+    lda player_anim,y
+    sta sprite_data_2+sprite_delay
+    iny
+    sty sprite_data_2+sprite_frame
     lda #PLAYER_HP
     sta player_hp
     lda #<PLAYER_START_X
