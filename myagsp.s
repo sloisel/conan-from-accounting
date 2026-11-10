@@ -52,6 +52,9 @@
 .const UI_HEART_BLK = UI_BLK
 .const UI_KEY_BLK   = UI_BLK + 1        // + key 0..2 (same picture, own colour)
 .const UI_DEAD_BLK  = UI_BLK + 4        // Conan lying dead (mycontrol.s player_list)
+.const MSG_Y        = 253               // message box (myui.s): sprite y, lines 254..274
+.const MSG_X        = 100               //   168 px of text (and the arrow), centred
+.const MSG_PARK_Y   = 247 - 21          //   game sprites with y >= this reach line 247
 // the blank sprite block is $ff ($3fc0-$3fff, cleared at ag_init): as a
 // character code it is blank too, which matters because the hidden badline
 // at 247 may fetch AG_SAFE's sprite pointer bytes as characters (its row can
@@ -745,7 +748,10 @@ ag_bot_open:
     and #$f7
     sta $d011
 ag_bot_body:
-    lda ag_commit
+    lda msg_on                  // the message box: its sprites (myui.s)
+    beq !+
+    jsr msg_sprites
+!:  lda ag_commit
     beq !+
     lda c_S
     sta p_S

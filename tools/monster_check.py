@@ -4,8 +4,10 @@
   behaviour: each type, observed for a while near its spawn point
   sword:     every type dies after its hit points' worth of sword hits
   contact:   touching a monster knocks the player back (hurt timer, border)
-  wizard:    no sword at first; touching the old wizard shows his message,
-             J continues, the player has the sword and the wizard is gone
+  wizard:    no sword at first, it lies by the old wizard; touching him
+             pauses the game with his message in a box under the play
+             window, J continues: the player has the sword, the wizard and
+             the sword on the ground are gone
   gates:     the locked gates open with their keys; the jail's starts
              the rescue, which ends on the title picture
 
@@ -21,10 +23,10 @@ import vice
 import game_check as g
 
 BLOB, SKEL, GHOST, CYCL, JELLY, WIZ, PRIN = 4, 6, 8, 10, 12, 14, 16
-HEART, KEYR, KEYG, KEYB = 18, 20, 22, 24
+HEART, KEYR, KEYG, KEYB, SWORDI = 18, 20, 22, 24, 26
 NAMES = {BLOB: "blob", SKEL: "skeleton", GHOST: "ghost", CYCL: "cyclops",
          JELLY: "jelly", WIZ: "wizard", PRIN: "princess", HEART: "heart",
-         KEYR: "red key", KEYG: "green key", KEYB: "blue key"}
+         KEYR: "red key", KEYG: "green key", KEYB: "blue key", SWORDI: "sword"}
 HP = {BLOB: 1, SKEL: 2, GHOST: 1, CYCL: 3, JELLY: 2}
 F = {"pointer": 4, "controller": 5, "gxlo": 9, "gxhi": 10, "gylo": 11, "gyhi": 12,
      "state": 21, "timer": 22, "hp": 23, "spawn": 24, "flash": 25, "dir": 26}
@@ -195,27 +197,50 @@ def wizard(gm):
     print(("ok   " if r else "FAIL ") + "without the sword, J does not strike")
     ok &= r
     k, s = gm.go_near(WIZ, 0, dx=10)
-    gm.put(0, s["x"] + 6 * 32, s["y"])                      # walk up to him
-    shown = False
-    for _ in range(10):
-        try:
-            gm.frame()
-        except RuntimeError:                                # the game loop is paused
-            shown = gm.v.mem_get(0xD018, 1)[0] & 0xFE == 0x24
+    for _ in range(40):                                     # the sword by him
+        sw = [t for t in gm.sprites() if t["controller"] == SWORDI]
+        if sw:
             break
+        gm.frame()
+    sy = gm.v.mem_get(gm.base + 64 + sw[0]["i"], 1)[0] if sw else 0
+    r = bool(sw) and sy != 0 and abs(sw[0]["x"] - s["x"]) <= 40 * 32 and abs(sw[0]["y"] - s["y"]) <= 40 * 32
+    print(("ok   " if r else "FAIL ") + f"the sword lies by the wizard, on screen ({bool(sw)}, y {sy})")
+    ok &= r
+    gm.put(0, s["x"] + 6 * 32, s["y"])                      # walk up to him
+    on = 0
+    for _ in range(10):
+        gm.frame()                                          # (the display goes on)
+        on = gm.v.mem_get(a("msg_on"), 1)[0]
+        if on:
+            break
+    gm.frame(2)
+    px = g.frame(gm.v)
+    box = {px(line, x) for line in range(254, 275) for x in range(100, 268)}
+    junk = {px(line, x) for line in range(254 + 17, 275) for x in range(100, 268)}   # below the text
+    window = {px(line, x) for line in range(100, 200) for x in range(40, 320)}
     vice.do_shot(gm.v, os.path.join(vice.ROOT, "screenshots", "wizard_message.png"))
-    text = gm.v.mem_get(0x0800 + 14 * 40, 40)
-    r = shown and bytes([9, 20, 39, 19]) in text            # "IT'S"
-    print(("ok   " if r else "FAIL ") + f"touching the wizard shows his message (text screen: {shown})")
+    arrow = []                                              # the arrow blinks
+    for _ in range(4):
+        gm.frame(9)
+        q = g.frame(gm.v)
+        arrow.append(1 in {q(line, x) for line in range(264, 272) for x in range(268, 284)})
+    blinks = True in arrow and False in arrow
+    r = on == 1 and 1 in box and len(window) > 2 and junk == {0} and blinks
+    print(("ok   " if r else "FAIL ") + f"touching the wizard: the game pauses with his message in a box under "
+          f"the play window (shown {on == 1}, white text {1 in box}, map still shown {len(window) > 2}, "
+          f"clean below the text {junk == {0}}, arrow blinking {blinks})")
     ok &= r
     vice.set_keys(gm.v, ["J"])
-    gm.v.resume(); import time; time.sleep(0.3)
+    gm.frame(5)
     vice.set_keys(gm.v, [])
     gm.frame(30)
     has = gm.v.mem_get(a("has_sword"), 1)[0]
     gone = gm.find(k) is None and gm.spawn_state(k) == 2
-    r = has == 1 and gone
-    print(("ok   " if r else "FAIL ") + f"after J: player has the sword ({has}), wizard gone ({gone})")
+    sword_gone = not any(t["controller"] == SWORDI for t in gm.sprites())
+    off = gm.v.mem_get(a("msg_on"), 1)[0] == 0
+    r = has == 1 and gone and sword_gone and off
+    print(("ok   " if r else "FAIL ") + f"after J: box gone ({off}), player has the sword ({has}), wizard "
+          f"gone ({gone}), sword off the ground ({sword_gone})")
     ok &= r
     return ok
 

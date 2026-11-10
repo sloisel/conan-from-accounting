@@ -15,7 +15,8 @@
 //   ghost     drifts towards the player through walls, eyes follow
 //   cyclops   patrols; charges when the player lines up with it
 //   jelly     turns on the spot, sinks, resurfaces near the player
-//   wizard    friendly, near the start: hands over the sword, then vanishes
+//   wizard    friendly, near the start: hands over the sword (lying by
+//             him, T_SWORDI), then vanishes
 //   princess  in her prison by the pond: opening it wins (mygates.s)
 
 .const T_BLOB = 4
@@ -27,6 +28,7 @@
 .const T_PRIN = 16
 .const T_HEART = 18                    // a heart dropped by a monster (myui.s)
 .const T_KEY = 20                      // keys: 20 red, 22 green, 24 blue
+.const T_SWORDI = 26                   // the sword on the ground by the wizard
 .const MAX_SPRITES = 16                // player, sword and up to 14 monsters alive
 .const INTANGIBLE = $80                // sprite_state bit: no hits, no contact
 .const DYING = $40                     // sprite_state bit: playing its death
@@ -36,7 +38,7 @@
 
 .segment TABLES
 // per type (index = type / 2)
-en_hp_tab:     .byte 0, 0, 1, 2, 1, 3, 2, 255, 255, 255, 255, 255, 255
+en_hp_tab:     .byte 0, 0, 1, 2, 1, 3, 2, 255, 255, 255, 255, 255, 255, 255
 debug_freeze_enemies: .byte 0          // tests: monsters keep still, no (de)spawning
 has_sword:     .byte 0                 // given by the wizard
 player_hurt:   .byte 0                 // frames of knockback/invulnerability left
@@ -104,6 +106,7 @@ dir4_dy_chg:   .word chargev, 0, -chargev, 0
     255,sp0+77, 0)                                   // 1: sunk
 .var wiz_list = List().add(255,sp0+78, 0)
 .var prin_list = List().add(60,sp0+83, 8,sp0+84, 0)
+.var swordi_list = List().add(255,sp0+43, 0)           // lying flat, point east
 
 blob_anim:  anim(blob_list)
 blob_index: index(blob_list)
@@ -119,6 +122,8 @@ wiz_anim:   anim(wiz_list)
 wiz_index:  index(wiz_list)
 prin_anim:  anim(prin_list)
 prin_index: index(prin_list)
+swordi_anim:  anim(swordi_list)
+swordi_index: index(swordi_list)
 
 .segment MAIN
 
@@ -1065,6 +1070,19 @@ control_wiz:
 wz_done:
     rts
 
+// control_swordi: the sword lying by the wizard until he hands it over
+control_swordi:
+    lda has_sword
+    beq !+
+    ldy sprite_data_2+sprite_spawn,x        // given: gone for good
+    lda #2
+    sta spawn_state,y
+    jmp sprite_free
+!:  jsr en_common               // (friendly: just shown)
+    bcc !+
+    rts
+!:  jmp en_finish
+
 control_prin:
     lda cut_phase
     cmp #2
@@ -1094,99 +1112,42 @@ cp_walk:                        // the rescue: out through the open gate
     jmp en_finish
 
 // ---- the wizard's message ----------------------------------------------
-// Stops the AGSP display, shows a plain text screen (ROM font, using the
-// AG_SAFE screen and colour RAM) with the wizard and the sword, keeps the
-// music going, waits for J or space, then restarts the display (ag_init
-// redraws the whole map, restoring AG_SAFE and colour RAM).
-.const MSG_SCREEN = AG_SAFE
-.const MSG_D018 = ((MSG_SCREEN >> 6) & $f0) | (($1000 >> 10) & $0e)
-
-.segment TABLES
-.encoding "screencode_upper"
-msg_line1: .text "IT'S DANGEROUS TO GO ALONE!"
-msg_line2: .text "TAKE THIS."
-msg_line3: .text "PRESS J OR SPACE"
-.encoding "petscii_mixed"
-.segment MAIN
-
+// The game stops where it is (the display, the sprites and the music go on)
+// and the message shows in a box in the open border under the play window
+// (myui.s: msg_sprites, from the bottom IRQ), until J or space.
 show_message:
-    sei
+    ldx sprite2_count           // sprites reaching below the window would
+!:  dex                         // read the box's pictures for their last
+    bmi !+                      // rows (AG_SAFE's pointers): parked for now
+    lda sprite_data_2+sprite_y,x
+    cmp #MSG_PARK_Y
+    bcc !-
     lda #0
-    sta $d01a                   // no AGSP raster interrupts
-    sta $d015
-    sta $d020
-    sta $d021
-    lda #$ff
-    sta $d019
-    ldx #0
-!:  lda #$20                    // clear the screen, white text
-    sta MSG_SCREEN,x
-    sta MSG_SCREEN+$100,x
-    sta MSG_SCREEN+$200,x
-    sta MSG_SCREEN+$2e8,x
+    sta sprite_data_2+sprite_y,x
+    beq !-
+!:  jsr mux_plan
+    jsr ag_commit_frame         // (shown from the next frame on)
+    ldx #7
+!:  lda msg_blocks,x
+    sta AG_SAFE+$3f8,x
+    dex
+    bpl !-
     lda #1
-    sta $d800,x
-    sta $d900,x
-    sta $da00,x
-    sta $dae8,x
-    inx
-    bne !-
-    ldx #msg_line2-msg_line1-1
-!:  lda msg_line1,x
-    sta MSG_SCREEN+14*40+(40-(msg_line2-msg_line1))/2,x
-    dex
-    bpl !-
-    ldx #msg_line3-msg_line2-1
-!:  lda msg_line2,x
-    sta MSG_SCREEN+16*40+(40-(msg_line3-msg_line2))/2,x
-    dex
-    bpl !-
-    ldx #16-1
-!:  lda msg_line3,x
-    sta MSG_SCREEN+22*40+12,x
-    lda #12
-    sta $d800+22*40+12,x
-    dex
-    bpl !-
-    lda #sp0+78                 // the wizard and the sword
-    sta MSG_SCREEN+$3f8
-    lda #sp0+41
-    sta MSG_SCREEN+$3f9
-    lda spritecolors+78
-    sta $d027
-    lda spritecolors+41
-    sta $d028
-    lda #160
-    sta $d000
-    lda #188
-    sta $d002
-    lda #110
-    sta $d001
-    sta $d003
-    lda #0
-    sta $d010
-    lda #MSG_D018
-    sta $d018
-    lda #$c8
-    sta $d016
-    lda #$1b
-    sta $d011
-    lda #3
-    sta $d015
-    ldx #<victory_irq           // music only
-    ldy #>victory_irq
-    jsr setup_irq
+    sta msg_on
 !:  jsr msg_key                 // wait: released, pressed, released
     bne !-
 !:  jsr msg_key
     beq !-
 !:  jsr msg_key
     bne !-
-    sei
     lda #0
-    sta $d01a
-    sta $d015
-    jmp ag_init                 // redraw the map, restart the raster engine
+    sta msg_on
+    ldx #7
+!:  lda #UI_BLANK_BLK
+    sta AG_SAFE+$3f8,x
+    dex
+    bpl !-
+    rts
 
 // msg_key: Z = 0 if J or space is down
 msg_key:
@@ -1236,18 +1197,4 @@ victory:
     lda #$ff
     sta $d019
     jmp credits
-// victory_irq: just the music (the wizard's message)
-victory_irq:
-    pha
-    txa
-    pha
-    tya
-    pha
-    asl $d019
-    jsr sidplay
-    pla
-    tay
-    pla
-    tax
-    pla
-    rti
+

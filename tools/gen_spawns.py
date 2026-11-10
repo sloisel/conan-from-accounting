@@ -25,9 +25,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # monster types = controller numbers in mycontrol.s
 BLOB, SKEL, GHOST, CYCL, JELLY, WIZ, PRIN = 4, 6, 8, 10, 12, 14, 16
 KEYR, KEYG, KEYB = 20, 22, 24                    # keys (myui.s)
+SWORDI = 26                                      # the sword on the ground by the wizard
 NAMES = {BLOB: "blob", SKEL: "skeleton", GHOST: "ghost", CYCL: "cyclops",
          JELLY: "jelly", WIZ: "wizard", PRIN: "princess",
-         KEYR: "red key", KEYG: "green key", KEYB: "blue key"}
+         KEYR: "red key", KEYG: "green key", KEYB: "blue key", SWORDI: "sword"}
 # the keys open the way on (map_extras.py): red key south of the graveyard's
 # fence, green key in the north-east forest (bridge gate), blue key in the
 # west meadow (the princess's jail)
@@ -70,6 +71,10 @@ def main():
     wizard = max(markers, key=lambda p: (p[0] - START[0]) ** 2 + (p[1] - START[1]) ** 2)
     for x, y in markers:
         spawns.append((x, y, WIZ, "start: wizard") if (x, y) == wizard else (x, y, BLOB, "marker"))
+    wx, wy = wizard                                # the sword lies next to him
+    sx, sy = next((wx + dx, wy + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                  if walk(wx + dx, wy + dy) and (wx + dx, wy + dy) not in markers)
+    spawns.append((sx, sy, SWORDI, "start: wizard"))
 
     # the princess in her jail by the pond
     px, py = mx.PRINCESS

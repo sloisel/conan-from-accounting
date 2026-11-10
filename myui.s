@@ -81,6 +81,7 @@ ui_init:
 !:  sta UI_BLANK_BLK * 64,x     // border) and the idle byte $3fff
     dex
     bpl !-
+    jsr msg_render              // the wizard's message box
     // fall through
 // ui_update: the strip's colours from player_hp and has_key
 ui_update:
@@ -105,6 +106,8 @@ ui_ptrs: .byte UI_HEART_BLK, UI_HEART_BLK, UI_HEART_BLK
 // ag_irq_ui: line 2: the status strip's sprites (the game's are all done)
 ag_irq_ui:
     pha
+    lda #$ff                    // multicolour (the message box's are hires)
+    sta $d01c
     lda #UI_Y
     .for (var k = 0; k < 6; k++) { sta $d001 + 2 * k }
     .for (var k = 0; k < 6; k++) {
@@ -273,3 +276,119 @@ it_touching:
 it_no:
     clc
     rts
+
+// ---- the message box (the wizard's words) -----------------------------------
+// Two lines of 21 chars in 7 hires sprites side by side, and a blinking
+// arrow (the 8th: J or space goes on), in the open border under the play
+// window: the bottom IRQ places them (msg_sprites) while msg_on; their
+// pointers are AG_SAFE's (the screen from line 246 on), set by show_message.
+// The text is drawn into 7 spare blocks of AG_ALT's middle at ag_init, from
+// the ROM font (rows 0..6 of each glyph, lines 10 rows apart).
+// (MSG_Y, MSG_X, MSG_PARK_Y: myagsp.s)
+.var msg_blk = List().add($31, $32, $33, $3a, $3b, $3c, $3d, $3e)
+.var msg_lines = List().add("IT'S DANGEROUS TO GO", "ALONE! TAKE THIS.")
+.const MSG_W = 21                       // chars a line (7 sprites)
+.for (var i = 0; i < 8; i++) {
+    .assert "message blocks in AG_ALT's middle, clear of the strip's and the clip's",
+        msg_blk.get(i) * 64 >= AG_ALT + 39 && msg_blk.get(i) * 64 + 64 <= AG_ALT + 977
+        && (msg_blk.get(i) < UI_BLK || msg_blk.get(i) > UI_BLK + 5), true
+}
+.segment TABLES
+msg_on:     .byte 0
+msg_blocks: .fill 8, msg_blk.get(i)
+.encoding "screencode_upper"
+msg_text:
+.for (var l = 0; l < 2; l++) {
+    .var t = msg_lines.get(l)
+    .errorif t.size() > MSG_W, "message line too long: " + t
+    .var p = floor((MSG_W - t.size()) / 2)
+    .fill p, $20
+    .text t
+    .fill MSG_W - p - t.size(), $20
+}
+.encoding "petscii_mixed"
+// char i of the text: where its rows go (block (i % MSG_W) / 3, byte
+// i % 3, row 10 * line)
+.function msg_dest(i) {
+    .var c = mod(i, MSG_W)
+    .return msg_blk.get(floor(c / 3)) * 64 + floor(i / MSG_W) * 30 + mod(c, 3)
+}
+msg_dlo: .fill 2 * MSG_W, <msg_dest(i)
+msg_dhi: .fill 2 * MSG_W, >msg_dest(i)
+// the arrow (8th block)
+msg_arrow: .byte %11111110, %01111100, %00111000, %00010000
+mr_i:    .byte 0
+
+// msg_render: ag_init (interrupts off): the text into the 8 blocks
+msg_render:
+    ldx #62                     // the 8 blocks: empty (loader leftovers)
+    lda #0
+!:  .for (var i = 0; i < 8; i++) { sta msg_blk.get(i) * 64,x }
+    dex
+    bpl !-
+    lda $01
+    pha
+    lda #$33                    // the character ROM at $d000
+    sta $01
+    ldx #0
+mr_loop:
+    stx mr_i
+    lda msg_text,x              // its glyph: $d000 + 8 * code
+    sta temp
+    lda #0
+    asl temp
+    rol
+    asl temp
+    rol
+    asl temp
+    rol
+    ora #$d0
+    sta temp+1
+    lda msg_dlo,x
+    sta temp2
+    lda msg_dhi,x
+    sta temp2+1
+    .for (var r = 0; r < 7; r++) {
+    ldy #r
+    lda (temp),y
+    ldy #r * 3
+    sta (temp2),y
+    }
+    ldx mr_i
+    inx
+    cpx #2 * MSG_W
+    bne mr_loop
+    pla
+    sta $01
+    .for (var r = 0; r < 4; r++) {  // the arrow: rows 12..15, at the left
+    lda msg_arrow + r
+    sta msg_blk.get(7) * 64 + (12 + r) * 3
+    }
+    rts
+
+.var msg_msb = 0
+.for (var k = 0; k < 8; k++) { .if (MSG_X + 24 * k >= 256) .eval msg_msb = msg_msb | (1 << k) }
+// msg_sprites: bottom IRQ (line 248+), while msg_on: the box's sprites
+msg_sprites:
+    lda #MSG_Y
+    .for (var k = 0; k < 8; k++) { sta $d001 + 2 * k }
+    .for (var k = 0; k < 8; k++) {
+    lda #<(MSG_X + 24 * k)
+    sta $d000 + 2 * k
+    }
+    lda #msg_msb                // (x >= 256: the high bits)
+    sta $d010
+    lda #1                      // white
+    .for (var k = 0; k < 8; k++) { sta $d027 + k }
+    lda #0
+    sta $d01c                   // hires
+    sta $d017
+    sta $d01d
+    lda ag_vbl                  // the arrow blinks
+    and #16
+    beq !+
+    lda #$80
+!:  eor #$ff
+    sta $d015
+    rts
+.segment MAIN
