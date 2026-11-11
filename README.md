@@ -4,6 +4,10 @@ An adventure game for the Commodore 64, by S. Loisel.
 
 **Play it in your browser:** https://sloisel.github.io/conan-from-accounting/
 
+**Disk image:** https://sloisel.github.io/conan-from-accounting/mygame.d64
+(`LOAD"*",8,1` and `RUN`; it uses a fastloader, so turn on true drive
+emulation in emulators other than VICE)
+
 Find the old wizard, take his sword, collect the red, green and blue keys,
 and free the princess from her jail.
 
